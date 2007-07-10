@@ -422,6 +422,14 @@ struct
   let diff_name name ((n,_) : chow_arg) = name <> n
   let random_choice lst = List.nth lst (Random.int (List.length lst)) 
 
+  (* choose randomly among the valid choices for an arg *)
+  let take_random_choice (choices : arg_choices) : arg_val =
+    match choices with
+    | BoolC  lst -> Bool  (random_choice lst)
+    | IntC   lst -> Int   (random_choice lst)
+    | FloatC lst -> Float (random_choice lst)
+    | TupleC lst -> Tuple (random_choice lst)
+
   (* change one arg in the arglist *)
   let change_random_arg hood (arglist : chow_arg list) = 
     (* some utility funs *)
@@ -449,13 +457,7 @@ struct
     in
     let new_choice = 
     match old_choice with
-      | None -> (
-        match choices with
-          | BoolC  lst -> Bool  (random_choice lst)
-          | IntC   lst -> Int   (random_choice lst)
-          | FloatC lst -> Float (random_choice lst)
-          | TupleC lst -> Tuple (random_choice lst)
-        )
+      | None -> take_random_choice choices
       | Some(arg) ->(
         match arg with
           | Bool b -> Bool (not b)
@@ -484,6 +486,17 @@ struct
   let fitbun = 
     FunctionSpecificFitness.make to_extern from_extern
   let fitness (hood : t) = fitbun
+
+  let random_resident hood files : resident = 
+    List.map (fun file ->
+      let adaptables = 
+        List.map (fun (name, choices) -> 
+          (name, take_random_choice choices)
+        ) hood.adaptable_args
+      in
+      (file, hood.fixed_args @ adaptables)
+    ) files
+    
 end
 
 (* benchmark specific neighbordhoods *)
@@ -531,8 +544,62 @@ List.map (fun config ->
 
 module Benchmarks = 
 struct
+  type benchmark = 
+    | Fmin
+    | Seval
+
+  let valid_names =
+    ["fmin"; "seval"]
+  let from_name = function
+    | "fmin" -> Fmin
+    | "seval" -> Seval
+    | _ as s -> failwith ("unknown benchmark "^s)
+
   let fmin = ["fmin.i"]
   let seval = ["spline.i"; "seval.i"]
+
+  let get_files_from_name s =
+    match (from_name s) with
+      | Fmin -> fmin
+      | Seval -> seval
+ 
 end
 
+(* module for saving solutions for some definition of saving *)
+module ChowSolution =
+(
+struct
+  let timestamp () = 
+    let tm = Unix.localtime (Unix.time ()) in
+    Printf.sprintf "%02d:%02d:%02d  %02d/%02d/%d" 
+      tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
+      (tm.Unix.tm_mon+1) tm.Unix.tm_mday (tm.Unix.tm_year+1900)
+
+  let file out_file resident = 
+      (*let ts = timestamp () in
+        Printf.printf "--- %s ---\n" ts;*)
+      List.iter (fun (file,args) ->
+        Printf.fprintf out_file "%s|%s\n" file args;
+      ) (ChowHood.to_extern resident);
+      Printf.fprintf out_file "%%\n";
+     flush out_file
+  let std resident = file stdout resident
+end
+:
+sig
+  val std  : ChowHood.resident -> unit
+  val file : out_channel ->  ChowHood.resident -> unit
+  val timestamp : unit -> string
+end
+)
+
+(* perform the search *limit* times on problems of size *size* *)
+let iter_search ~limit search seed save next =
+  let rec do_search n start =
+    if n <= 0 then start else
+      let solution = search start in
+      let _ = save solution in
+      let seed' = next solution in do_search (n-1) seed'
+  in
+  do_search limit seed
 
