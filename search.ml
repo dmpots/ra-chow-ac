@@ -2,9 +2,10 @@
 (*let _ = Random.self_init ()*)
 
 
-type 'a fitness_bundle = {
-  fitness : 'a -> float;
-  best_fitness : 'a list -> 'a * float;
+type ('a, 'b) fitness_bundle = {
+  fitness : 'a -> 'b;
+  best_fitness : 'a list -> 'a * 'b;
+  summarize : 'b -> float;
 }
 
 (* general neighborhood structure *)
@@ -13,20 +14,22 @@ sig
   type t 
   type resident
   type description
+  type fit_result
   val create : description -> t
   val neighbors : t -> resident -> int -> resident list
   val random_neighbor : t -> resident -> resident
-  val fitness : t -> resident fitness_bundle 
+  val fitness : t -> (resident,fit_result) fitness_bundle 
 end
 
 module PassNeighborHood =
 struct 
   type resident = string
+  type fit_result = float
   type t = {
     all_passes : resident list;
-    fb    : resident fitness_bundle
+    fb    : (resident,fit_result) fitness_bundle
   }
-  type description = resident list * resident fitness_bundle
+  type description = resident list * (resident,float) fitness_bundle
 
   (* change one letter in the pass string *)
   let change_one = fun hood pass -> 
@@ -77,9 +80,10 @@ struct
     let sorted = List.sort (fun (_,f1) (_,f2) -> compare f2 f1) res_fits in
     List.hd sorted
 
-  let make () : PassNeighborHood.resident fitness_bundle = {
+  let make () : (PassNeighborHood.resident, float) fitness_bundle = {
     fitness=fitness; 
     best_fitness=best_fitness;
+    summarize = (fun x -> x);
   }
 end
 
@@ -90,11 +94,12 @@ struct
   type file = string
   type passes = string
   type resident = (file * passes) list
+  type fit_result = ((file * passes * float) list * float)
   type t = {
     all_passes : passes list;
-    fb    : resident fitness_bundle
+    fb    : (resident, fit_result) fitness_bundle
   }
-  type description = passes list * resident fitness_bundle
+  type description = passes list * (resident,fit_result) fitness_bundle
 
   (* change one letter in the pass string *)
   let change_one = fun hood pass -> 
@@ -228,7 +233,9 @@ struct
   let fitness massage resident = 
     let massaged = massage resident in
     let each_fun_marked = ExternalFitness.single_fitness massaged in 
-    List.fold_left (fun sum (file,pass,fit) -> sum +. fit) 0.0 each_fun_marked
+    List.fold_left (fun (fits, sum) (file,pass,fit) -> 
+      (file,pass,fit)::fits, sum +. fit
+    ) ([], 0.0) each_fun_marked
 
   (*---------------------------fun---------------------------------*) 
   (* find the fitness of each (function,pass) pair and choose the result
@@ -256,12 +263,12 @@ struct
     ) (M.empty) each_fun_marked
     in
     (* convert the map into resident * fitness pair *)
-    let best_res,fit = 
-      M.fold (fun file (pass, fit) (res, sum) ->
-        ((file, pass)::res, fit +. sum)
-      ) best_map ([], 0.0)
+    let best_res,fits,fit = 
+      M.fold (fun file (pass, fit) (res, fits, sum) ->
+        ((file, pass)::res, (file,pass,fit)::fits, fit +. sum)
+      ) best_map ([], [], 0.0)
     in
-    (unmassage best_res, fit)
+    (unmassage best_res, (fits,fit))
 
   (*---------------------------fun---------------------------------*) 
   (* probably change this to pass in the external fitness function to
@@ -270,12 +277,15 @@ struct
   let make massage unmassage = {
     fitness=fitness massage; 
     best_fitness=best_fitness massage unmassage;
+    summarize = (fun (_, sum) -> sum)
   }
 end
 
 module HillClimber (N : NEIGHBORHOOD) =
 struct
-  let better_than challenger champ = challenger < champ
+  let better_than_in_hood hood challenger champ = 
+    let summ = (N.fitness hood).summarize in
+    (summ challenger ) < (summ champ)
 (*  print_string "better_than? :";
     print_float challenger;
     print_string " ";
@@ -288,6 +298,7 @@ struct
   let search (hood : N.t) (seed : N.resident) =
     let patience = 10 in 
     let num_nebs = 100 in 
+    let better_than = better_than_in_hood hood in
     let best_fit = (N.fitness hood).best_fitness in
     let rec do_search state curfit laterals =
       let nebs = N.neighbors hood state num_nebs in
@@ -301,10 +312,10 @@ struct
             do_search newstate bestfit (laterals - 1) 
           else
             (*let _ = print_string "SAME BEST - NO MORE LATERALS\n" in*)
-            state
+            state,bestfit
         else (* only found worse neighbors *)
             (*let _ = print_string "!SAME BEST\n" in*)
-          state
+          state,bestfit
     in
     let startfit = ((N.fitness hood).fitness) seed  in
     do_search seed startfit patience 
@@ -389,6 +400,7 @@ struct
   open ChowArgs
   type file = string
   type resident = (file * (chow_arg list)) list
+  type fit_result = ((file * string * float) list * float)
   type t = {
     fixed_args : chow_arg list;
     adaptable_args : ChowArgs.spec list;
@@ -569,26 +581,28 @@ end
 module ChowSolution =
 (
 struct
+  type save_type = (ChowHood.resident * ChowHood.fit_result)
   let timestamp () = 
     let tm = Unix.localtime (Unix.time ()) in
     Printf.sprintf "%02d:%02d:%02d  %02d/%02d/%d" 
       tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
       (tm.Unix.tm_mon+1) tm.Unix.tm_mday (tm.Unix.tm_year+1900)
 
-  let file out_file resident = 
+  let file out_file (resident, (fits,sum)) = 
       (*let ts = timestamp () in
         Printf.printf "--- %s ---\n" ts;*)
-      List.iter (fun (file,args) ->
-        Printf.fprintf out_file "%s|%s\n" file args;
-      ) (ChowHood.to_extern resident);
+      List.iter (fun (file,args,count) ->
+        Printf.fprintf out_file "%s|%.0f|%s\n" file count args;
+      ) fits;
       Printf.fprintf out_file "%%\n";
      flush out_file
-  let std resident = file stdout resident
+  let std = file stdout 
 end
 :
 sig
-  val std  : ChowHood.resident -> unit
-  val file : out_channel ->  ChowHood.resident -> unit
+  type save_type = (ChowHood.resident * ChowHood.fit_result)
+  val std  : save_type -> unit
+  val file : out_channel -> save_type -> unit
   val timestamp : unit -> string
 end
 )
