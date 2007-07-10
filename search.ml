@@ -167,7 +167,7 @@ module ExternalFitness =
 struct
   type rep = (string * string) list
   type output = string * string * float list
-  let extrn_prog = "tw.rb"
+  let extrn_prog = "run-tw"
   let sec_sep = "%"
   let line_sep = "|"
 
@@ -533,16 +533,42 @@ module HCF = HillClimber(FunctionPassHood)
 
 
 (* chow specific neighbordhoods *)
-let fixed = [
-  ("r", ChowArgs.Int 32)
-]
-let adaptable = [
-  ("b", ChowArgs.IntC [2;3;4;5]);
-  ("l", ChowArgs.TupleC [(0,0); (0,2); (0,4)]);
-  ("m", ChowArgs.BoolC  [true; false]);
-  ("e", ChowArgs.BoolC  [true; false]);
-]
-let chood = ChowHood.create (fixed, adaptable)
+module ChowChoices = 
+struct
+
+  let combine list1 list2 =
+    List.flatten (
+      List.map (fun elem ->
+        List.map (fun elem2 ->
+          (elem, elem2)
+        ) list2
+      ) list1
+    )
+  let upto limit step =
+    let rec aux n ns = 
+      if n > limit then ns else aux (n+step) (n::ns)
+    in
+    List.rev (aux 0 [])
+
+  let fixed = [
+    ("r", ChowArgs.Int 32)
+  ]
+  let adaptable = [
+    ("b", ChowArgs.IntC [0;2;3;4;5;6;7;8;9;10;15]);
+    ("l", ChowArgs.TupleC (combine (upto 28 1) (upto 26 2)));
+    ("m", ChowArgs.BoolC  [true; false]);
+    ("e", ChowArgs.BoolC  [true; false]);
+    ("z", ChowArgs.BoolC  [true; false]);
+    ("t", ChowArgs.BoolC  [true; false]);
+    ("c", ChowArgs.IntC   [0;1;2;3]);
+    ("s", ChowArgs.IntC   [0;1]);
+    ("g", ChowArgs.BoolC  [true; false]);
+    ("o", ChowArgs.BoolC  [true; false]);
+    ("a", ChowArgs.BoolC  [true; false]);
+  ]
+end
+
+let chood = ChowHood.create (ChowChoices.fixed, ChowChoices.adaptable)
 module HCC = HillClimber(ChowHood)
 
 
@@ -591,9 +617,10 @@ struct
   let file out_file (resident, (fits,sum)) = 
       (*let ts = timestamp () in
         Printf.printf "--- %s ---\n" ts;*)
+      let sorter = (fun (_,_,f1) (_,_,f2) -> compare f2 f1) in
       List.iter (fun (file,args,count) ->
         Printf.fprintf out_file "%s|%.0f|%s\n" file count args;
-      ) fits;
+      ) (List.sort sorter fits);
       Printf.fprintf out_file "%%\n";
      flush out_file
   let std = file stdout 

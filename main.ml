@@ -50,7 +50,7 @@ let build_search lim alg seed out_file =
   let _ = if seed <> -1 then Random.init seed in
   let outchan = if out_file = ""  then stdout else open_out out_file in
   let saver = ChowSolution.file outchan in
-  let nhood = ChowHood.create (Search.fixed, Search.adaptable) in
+  let nhood = ChowHood.create (ChowChoices.fixed, ChowChoices.adaptable) in
   let searchfun = 
     match alg with
       | HC -> HCC.search nhood
