@@ -1,5 +1,5 @@
 
-let _ = Random.self_init ()
+(*let _ = Random.self_init ()*)
 
 
 type 'a fitness_bundle = {
@@ -16,7 +16,6 @@ sig
   val create : description -> t
   val neighbors : t -> resident -> int -> resident list
   val random_neighbor : t -> resident -> resident
-  val random_member : t -> resident
   val fitness : t -> resident fitness_bundle 
 end
 
@@ -57,8 +56,6 @@ struct
   (* fitness definitons *)
   let fitness hood = hood.fb
 
-  (* silly (non)random member *)
-  let random_member hood = List.hd hood.all_passes
 end
 
 module WeirdFitness =
@@ -138,21 +135,10 @@ struct
   let random_neighbor = fun hood res -> 
     List.map (fun (file,pass) -> (file, change_one hood pass)) res
 
-  let random_member = fun hood -> [("noway", "hose")]
     
   (* fitness definitons *)
   let fitness hood = hood.fb
 end
-
-(*
-module ChowHood =
-struct 
-  type file = string
-  type args = string
-  type resident = (file * args)
-  type description =
-end
-*)
 
 (* Access an external program for computing fitness. This is used to
  * run the iloc compiler and then use the operation count for the
@@ -174,6 +160,8 @@ end
  ***)
 module ExternalFitness =
 struct
+  type rep = (string * string) list
+  type output = string * string * float list
   let extrn_prog = "tw.rb"
   let sec_sep = "%"
   let line_sep = "|"
@@ -218,7 +206,7 @@ struct
     !fits
 
   (* compute the fitness of each resident in one swoop
-   * (file * args) list list -> (file * args * float) list
+   * (file * args) list list -> (file * args * float) list list
    ***)
   let bulk_fitness residents  =
     let extrn_res,extrn_fit = Unix.open_process extrn_prog in
@@ -236,28 +224,31 @@ end
 
 module FunctionSpecificFitness = 
 struct
-  type resident = FunctionPassHood.resident 
-
-  (*---------------------------fun---------------------------------*) 
- let fitness resident = 
-    let each_fun_marked = ExternalFitness.single_fitness resident in 
+ (*---------------------------fun---------------------------------*) 
+  let fitness massage resident = 
+    let massaged = massage resident in
+    let each_fun_marked = ExternalFitness.single_fitness massaged in 
     List.fold_left (fun sum (file,pass,fit) -> sum +. fit) 0.0 each_fun_marked
 
   (*---------------------------fun---------------------------------*) 
   (* find the fitness of each (function,pass) pair and choose the result
      to be a combination of the highest individual function pairs *)
-  let best_fitness residents =
+  let best_fitness massage unmassage residents =
+    let better_than challenger champ = challenger < champ in
+    (* make sure the residents are in a form suitable for use with the
+       External fitness module *)
+    let massaged = List.map massage residents in
     (* get a long list containing (function,args,fitness) for every
        function and args that exists in the original residents entries *)
     let each_fun_marked = 
-      List.flatten (ExternalFitness.bulk_fitness residents) in
+      List.flatten (ExternalFitness.bulk_fitness massaged) in
     (* collect results into map of function --> (pass,bestfitness) *)
     let module M = Map.Make(String) in
     let best_map = 
     List.fold_left (fun map (file, pass, fit) -> 
       try
         let (_,bestfit) = M.find file map in
-        if fit > bestfit then 
+        if better_than fit bestfit then 
           M.add file (pass,fit) (M.remove file map) 
         else map
       with Not_found -> 
@@ -265,23 +256,32 @@ struct
     ) (M.empty) each_fun_marked
     in
     (* convert the map into resident * fitness pair *)
-    M.fold (fun file (pass, fit) (res, sum) ->
-      ((file, pass)::res, fit +. sum)
-    ) best_map ([], 0.0)
+    let best_res,fit = 
+      M.fold (fun file (pass, fit) (res, sum) ->
+        ((file, pass)::res, fit +. sum)
+      ) best_map ([], 0.0)
+    in
+    (unmassage best_res, fit)
 
   (*---------------------------fun---------------------------------*) 
   (* probably change this to pass in the external fitness function to
      use and curry the fitness functions to take that as the first
      param *)
-  let make () : FunctionPassHood.resident fitness_bundle = {
-    fitness=fitness; 
-    best_fitness=best_fitness;
+  let make massage unmassage = {
+    fitness=fitness massage; 
+    best_fitness=best_fitness massage unmassage;
   }
 end
 
 module HillClimber (N : NEIGHBORHOOD) =
 struct
   let better_than challenger champ = challenger < champ
+(*  print_string "better_than? :";
+    print_float challenger;
+    print_string " ";
+    print_float champ;
+    print_string "\n";
+*)
   (* right now low fitness is good so that opcount translates directly
      to fitness, but we could pass a function to compare fitness
      levels if we need high fitness to be good *)
@@ -310,6 +310,182 @@ struct
     do_search seed startfit patience 
 end
 
+module ChowArgs = 
+struct
+  type arg_choices = 
+  | BoolC   of bool list
+  | FloatC  of float list
+  | IntC    of int list
+  | TupleC  of (int * int) list
+
+  type arg_val = 
+  | Bool   of bool 
+  | Float  of float 
+  | Int    of int 
+  | Tuple  of (int * int) 
+
+  type arg_name = string
+  type spec = arg_name *  arg_choices
+  type chow_arg = arg_name * arg_val 
+
+  let to_string (name, value) =
+    let name_s = ("-"^name^" ") in
+    match value with
+      | Bool true -> name_s 
+      | Bool false -> ""
+      | Float f -> name_s^(string_of_float f)
+      | Int i   -> name_s^(string_of_int i)
+      | Tuple (f,s) -> name_s^(string_of_int f)^","^(string_of_int s)
+
+
+
+  (* for parsing arg values from a string. note that the parser here
+     will be kinda picky in that each arg must have a space following
+     the arg, i.e  -b 5 works but -b5 does not *)
+  let spaces = Str.regexp "[ ]+" 
+  let comma  = Str.regexp "," 
+  let arg_accum = ref []
+  let add_arg arg = arg_accum := arg :: !arg_accum
+  let make_bool_arg name ()  = add_arg (name, Bool true)
+  let make_int_arg name ival = add_arg (name, Int ival)
+  let make_tup_arg name sval = 
+    match (Str.bounded_split comma sval 2) with
+      | [h;t] -> add_arg (name, Tuple (int_of_string h, int_of_string t))
+      | _ -> failwith "tuple arg did not have two parts"
+
+  let all_args = [
+    ("-b", Arg.Int (make_int_arg  "b"), "");
+    ("-r", Arg.Int (make_int_arg  "r"), "");
+    ("-p", Arg.Unit(make_bool_arg "p"), "");
+    ("-m", Arg.Unit(make_bool_arg "m"), "");
+    ("-e", Arg.Unit(make_bool_arg "e"), "");
+    ("-f", Arg.Unit(make_bool_arg "f"), "");
+    ("-y", Arg.Unit(make_bool_arg "y"), "");
+    ("-z", Arg.Unit(make_bool_arg "z"), "");
+    ("-t", Arg.Unit(make_bool_arg "t"), "");
+    ("-c", Arg.Int (make_int_arg  "c"), "");
+    ("-i", Arg.Int (make_int_arg  "i"), "");
+    ("-w", Arg.Int (make_int_arg  "w"), "");
+    ("-s", Arg.Int (make_int_arg  "s"), "");
+    ("-g", Arg.Unit (make_bool_arg "g"), "");
+    ("-o", Arg.Unit (make_bool_arg "o"), "");
+    ("-a", Arg.Unit (make_bool_arg "a"), "");
+    ("-l", Arg.String (make_tup_arg  "l"), "");
+  ]
+
+  let from_string str  : chow_arg list =
+    let split = Array.of_list ("dummy"::(Str.split spaces str)) in
+    arg_accum := [];
+    Arg.parse_argv ~current:(ref 0) split all_args (fun _ -> ()) "";
+    !arg_accum
+   
+(*  let change_random_arg (arg : chow_arg) =*)
+    
+end
+
+
+module ChowHood =
+struct
+  open ChowArgs
+  type file = string
+  type resident = (file * (chow_arg list)) list
+  type t = {
+    fixed_args : chow_arg list;
+    adaptable_args : ChowArgs.spec list;
+  }
+  type description = (chow_arg list * ChowArgs.spec list)
+
+  let create (fixed, adaptable) = {
+    fixed_args = fixed;
+    adaptable_args  = adaptable;
+  }
+  
+  (* could use buf for more efficency here *)
+  let join lst sep to_s = 
+    List.fold_left (fun acc mem -> acc ^ sep ^ (to_s mem)) "" lst
+    
+  (* convet the resident to a format usable with external fitness *)
+  let to_extern (resident : resident) : ExternalFitness.rep =
+    List.map (fun (file, args) -> 
+      (file, join args " " ChowArgs.to_string)
+    ) resident
+
+  (* convet the resident from format used by external fitness *)
+  let from_extern (extrn_rep :ExternalFitness.rep) : resident =
+    List.map (fun (file, args) ->
+      (file, ChowArgs.from_string args)
+    ) extrn_rep
+
+
+  (* some utility functions *)
+  let same_name name ((n,_) : chow_arg) = name = n
+  let diff_name name ((n,_) : chow_arg) = name <> n
+  let random_choice lst = List.nth lst (Random.int (List.length lst)) 
+
+  (* change one arg in the arglist *)
+  let change_random_arg hood (arglist : chow_arg list) = 
+    (* some utility funs *)
+    let filter_int_list n = function
+      | IntC cs -> List.filter (fun n' -> n <> n') cs
+      | _ -> failwith "oops should be int"
+    in
+    let filter_tuple_list tup = function
+      | TupleC cs -> List.filter (fun tup' -> tup <> tup') cs
+      | _ -> failwith "oops should be tuple"
+    in
+    let filter_float_list f = function
+      | FloatC cs -> List.filter (fun f' -> f <> f') cs
+      | _ -> failwith "oops should be float"
+    in
+    (* choose an arg to change *)
+    let (name,choices) = random_choice hood.adaptable_args in
+    let chosen_arg = same_name name in
+    (* see if there is a previous value for this arg *)
+    let old_choice = 
+      if List.exists chosen_arg arglist then 
+        Some (snd (List.find chosen_arg arglist))
+      else
+        None
+    in
+    let new_choice = 
+    match old_choice with
+      | None -> (
+        match choices with
+          | BoolC  lst -> Bool  (random_choice lst)
+          | IntC   lst -> Int   (random_choice lst)
+          | FloatC lst -> Float (random_choice lst)
+          | TupleC lst -> Tuple (random_choice lst)
+        )
+      | Some(arg) ->(
+        match arg with
+          | Bool b -> Bool (not b)
+          | Int  n -> Int (random_choice (filter_int_list n choices))
+          | Float f -> Float (random_choice (filter_float_list f choices))
+          | Tuple t -> Tuple (random_choice (filter_tuple_list t choices))
+        )
+    in (name, new_choice)::(List.filter (diff_name name) arglist)
+
+  (* a group of random neighbors (possibly with repeats) *)
+   let neighbors hood (resident : resident) count = 
+    let len = Array.to_list (Array.make count resident) in
+    List.map (fun file_args ->
+      List.map (fun (file, arglist) ->
+        file, (change_random_arg hood arglist)
+      ) file_args
+    ) len
+
+  (* one random neighbor *)
+  let random_neighbor hood (resident: resident) : resident = 
+    List.map (fun (file, arglist) ->
+        file, (change_random_arg hood arglist)
+    ) resident
+    
+  (* chow neighborhoods can all use the same fitness *)
+  let fitbun = 
+    FunctionSpecificFitness.make to_extern from_extern
+  let fitness (hood : t) = fitbun
+end
+
 (* benchmark specific neighbordhoods *)
 let wfb = WeirdFitness.make () 
 let passes = ["a"; "b"; "c"; "d"; "g"; 
@@ -319,15 +495,39 @@ let ph = PassNeighborHood.create (passes, wfb);;
 module HC = HillClimber(PassNeighborHood)
 
 (* function specific neighbordhoods *)
-let ffb = FunctionSpecificFitness.make () 
+let id = (fun x -> x)
+let ffb = FunctionSpecificFitness.make id id
 let fh = FunctionPassHood.create (passes, ffb);;
-let tests = [
+let tests2 = [
   [("seval.i", "abcdefg"); ("spline.i", "abdeftg")];
   [("seval.i", "abddefg"); ("spline.i", "acdeftg")];
   [("seval.i", "abddefs"); ("spline.i", "acdmftg")];
   [("seval.i", "abedefs"); ("spline.i", "acdiofg")];
 ]
 module HCF = HillClimber(FunctionPassHood)
+
+
+(* chow specific neighbordhoods *)
+let fixed = [
+  ("r", ChowArgs.Int 32)
+]
+let adaptable = [
+  ("b", ChowArgs.IntC [2;3;4;5]);
+  ("l", ChowArgs.TupleC [(0,0); (0,2); (0,4)]);
+  ("m", ChowArgs.BoolC  [true; false]);
+  ("e", ChowArgs.BoolC  [true; false]);
+]
+let chood = ChowHood.create (fixed, adaptable)
+module HCC = HillClimber(ChowHood)
+
+
+let ars = ChowArgs.from_string "-r 32 -b 5 -l 2,2"
+let rezs : ChowHood.resident list = 
+List.map (fun config ->
+  List.map (fun (file, args) -> (file, ChowArgs.from_string args))config
+) [
+  [("seval.i", "-r 32 -b 5 -e"); ("spline.i", "-r 32 -b 6 -m")];
+]
 
 module Benchmarks = 
 struct
