@@ -1,0 +1,9 @@
+#!/bin/env bash
+
+TWK_DIR=.
+PREP_DIR=$TWK_DIR/SCRATCH
+
+
+#cat $* | ruby ${TWK_DIR}/tweaker.rb -d ${PREP_DIR} | ${TWK_DIR}/massage
+
+
