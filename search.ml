@@ -1,7 +1,3 @@
-
-(*let _ = Random.self_init ()*)
-
-
 type ('a, 'b) fitness_bundle = {
   fitness : 'a -> 'b;
   best_fitness : 'a list -> 'a * 'b;
@@ -610,6 +606,12 @@ struct
     | "svd" -> Svd
     | "urand" -> Urand
     | "zeroin" -> Zeroin
+    | "doduc" -> Doduc
+    | "fpppp" -> Fpppp
+    | "matrix300" -> Matrix300
+    | "tomcatv" -> Tomcatv
+    | "applu" -> Applu
+    | "wave5X" -> Wave5X
     | _ as s -> failwith ("unknown benchmark "^s)
 
   (* fmm *)
