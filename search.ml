@@ -280,41 +280,38 @@ end
 module HillClimber (N : NEIGHBORHOOD) =
 struct
   let better_than_in_hood hood challenger champ = 
-    let summ = (N.fitness hood).summarize in
+    let summ = (N.fitness hood).summarize  in
     (summ challenger ) < (summ champ)
-(*  print_string "better_than? :";
-    print_float challenger;
-    print_string " ";
-    print_float champ;
-    print_string "\n";
-*)
-  (* right now low fitness is good so that opcount translates directly
+  let same_fitness_level hood challenger champ =
+    let summ = (N.fitness hood).summarize  in
+    (summ challenger ) = (summ champ)
+    
+ (* right now low fitness is good so that opcount translates directly
      to fitness, but we could pass a function to compare fitness
      levels if we need high fitness to be good *)
-  let search (hood : N.t) (seed : N.resident) =
+  let search (hood : N.t) (seed : N.resident) limit =
     let patience = 10 in 
-    let num_nebs = 100 in 
+    let num_nebs evals = min 100 (limit - evals) in 
     let better_than = better_than_in_hood hood in
     let best_fit = (N.fitness hood).best_fitness in
-    let rec do_search state curfit laterals =
-      let nebs = N.neighbors hood state num_nebs in
+    let rec do_search state curfit laterals evals =
+      if evals >= limit then (state,curfit),evals else
+      let num_new_nebs = num_nebs evals in
+      let num_new_evals = num_new_nebs + evals + 1 (*+1 for state*) in
+      let nebs = N.neighbors hood state num_new_nebs in
       let newstate,bestfit = best_fit (state::nebs) in
       if better_than bestfit curfit then (* low fitness is good *)
-        do_search newstate bestfit laterals 
+        do_search newstate bestfit laterals num_new_evals
       else
-        if curfit = bestfit then
-          if laterals > 0 then
-            (*let _ = print_string ">> LATERAL\n" in*)
-            do_search newstate bestfit (laterals - 1) 
-          else
-            (*let _ = print_string "SAME BEST - NO MORE LATERALS\n" in*)
-            state,bestfit
+        if (same_fitness_level hood curfit bestfit) && laterals > 0 then
+          (*let _ = print_string ">> LATERAL\n" in*)
+          do_search newstate bestfit (laterals - 1) num_new_evals
         else (* only found worse neighbors *)
             (*let _ = print_string "!SAME BEST\n" in*)
-          state,bestfit
+          (state,bestfit),num_new_evals
     in
     let startfit = ((N.fitness hood).fitness) seed  in
-    do_search seed startfit patience 
+    do_search seed startfit patience 1
 end
 
 module ChowArgs = 
@@ -721,9 +718,9 @@ end
 let iter_search ~limit search seed save next =
   let rec do_search n start =
     if n <= 0 then start else
-      let solution = search start in
+      let (solution,evals) = search start n in
       let _ = save solution in
-      let seed' = next solution in do_search (n-1) seed'
+      let seed' = next solution in do_search (n-evals) seed'
   in
   do_search limit seed
 
