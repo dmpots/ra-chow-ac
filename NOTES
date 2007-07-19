@@ -1,0 +1,68 @@
+=============================================
+Notes on adaptive compilation with Tim
+Thu Jul 19 17:35:30 CDT 2007
+=============================================
+1) think of each search as happening independently. no need to tie the
+params together.
+
+2) greedy search - take the first downward step that you find. don't
+wait to generate all of your neighbors, instead just explore as
+needed and when you find one that is better then take it immeaditly.
+Note that this means you will have to keep track of which neighbors
+have already been explored and not explore those again.
+
+3) patience - tells you when to stop the search. specify the number of
+neighbors to look at before restarting
+
+4) implementation - use worklists for each file. each search is
+happening independently. when you find a local minima for one then you
+can restart that search independently of the other functions
+
+
+write down what you first tried and how it came up short:
+The first iteration we tried to make the state space be a set of file
+and args for that file. The problem is that when you have the database
+at hand you may find that you have already generated some neighbors of
+a point. There is no need to compile those again and you can just
+lookup the value in the database. Howerver this means that you are not
+really exploring on that iteration of the search for that file. In
+essence the slowest to progress is holding you back. If all of the
+neighbors for a file have been seen then you would like to pick the
+best and explore some more from that location. Otherwise you can not
+compile that file in this round of searching, but you will lose out on
+making any progress in that file. by searching on the files
+independently this also means that you can restart the search for any
+files that reach a local minimum. Thus different files can be in
+different parts of the search. You need to keep track of the best that
+you found so far so that when the search ends you have the best value.
+
+We are describing a method for 2-d adaptive compiler search.
+
+Neighbor structure:
+Each neighbor is found by taking one parameter and switching its
+value. This means that there are 418 total neighbors for a given
+state. Each state is a setting of each of the params. Since there are
+418 different settings total, there are 418 different neighbors. Only
+one setting is changed at a time, otherwise there would be a
+combinatorial explosion and the number of neighbors would be too great.
+
+b - 16
+l - 328 (28 * 13)
+e - 2
+z - 2
+t - 2
+c - 4
+s - 2
+g - 2
+o - 2
+a - 2
+------
+418 total
+
+
+
+
+
+
+
+
