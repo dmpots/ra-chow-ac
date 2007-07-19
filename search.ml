@@ -291,8 +291,8 @@ end
 module ExternalFitness =
 struct
   type rep = (string * string) list
-  type output = string * string * float list
-  let extrn_prog = "tw.rb"
+  type output = (string * string * float) list
+  let extrn_prog = "run-tw"
   let sec_sep = "%"
   let line_sep = "|"
 
@@ -349,18 +349,33 @@ struct
   (* take the single (file * args * opcount) from the results and
    * return it *)
   let single_fitness resident = 
-    List.hd (bulk_fitness [resident])
+    if resident = [] then [] 
+    else List.hd (bulk_fitness [resident])
 end
 
 module FunctionSpecificFitness = 
 struct
+  let puts s = print_string s; print_newline ()
+
+  let separate cache (massaged : ExternalFitness.rep) =
+    List.fold_left (fun (repeats, news) (file,args) ->
+      match (cache.find file args) with
+        | None -> (repeats, (file,args)::news)
+        | Some fitness -> ((file,args,fitness)::repeats, news)
+    ) ([],[]) massaged
+
+  let update_cache cache (updates : ExternalFitness.output) =
+    List.map (fun (file,args,fit) -> cache.add file args fit) updates
+
  (*---------------------------fun---------------------------------*) 
   let fitness cache massage resident = 
     let massaged = massage resident in
-    let each_fun_marked = ExternalFitness.single_fitness massaged in 
+    let previous,need_fit = separate cache massaged in
+    let each_fun_marked = ExternalFitness.single_fitness need_fit in 
+    let _ = update_cache cache each_fun_marked in
     List.fold_left (fun (fits, sum) (file,pass,fit) -> 
       (file,pass,fit)::fits, sum +. fit
-    ) ([], 0.0) each_fun_marked
+    ) ([], 0.0) (previous@each_fun_marked)
 
   (*---------------------------fun---------------------------------*) 
   (* find the fitness of each (function,pass) pair and choose the result
@@ -370,10 +385,15 @@ struct
     (* make sure the residents are in a form suitable for use with the
        External fitness module *)
     let massaged = List.map massage residents in
+    let previous,need_fit = 
+      List.split (List.map (separate cache) massaged) in
+    (* mass together all previously computed fitness values *)
+    let previous = List.fold_left (fun a b -> a@b) [] previous in
     (* get a long list containing (function,args,fitness) for every
        function and args that exists in the original residents entries *)
     let each_fun_marked = 
-      List.flatten (ExternalFitness.bulk_fitness massaged) in
+      List.flatten (ExternalFitness.bulk_fitness need_fit) in
+    let _ = update_cache cache each_fun_marked in
     (* collect results into map of function --> (pass,bestfitness) *)
     let module M = Map.Make(String) in
     let best_map = 
@@ -385,7 +405,7 @@ struct
         else map
       with Not_found -> 
         M.add file (pass, fit) map
-    ) (M.empty) each_fun_marked
+    ) (M.empty) (previous@each_fun_marked)
     in
     (* convert the map into resident * fitness pair *)
     let best_res,fits,fit = 
@@ -421,8 +441,8 @@ struct
      to fitness, but we could pass a function to compare fitness
      levels if we need high fitness to be good *)
   let search (hood : N.t) (seed : N.resident) limit =
-    let patience = 10 in 
-    let num_nebs evals = min 100 (limit - evals) in 
+    let patience = 2 in 
+    let num_nebs evals = min 10 (limit - evals) in 
     let better_than = better_than_in_hood hood in
     let best_fit = (N.fitness hood).best_fitness in
     let rec do_search state curfit laterals evals =
@@ -472,8 +492,6 @@ struct
       | Int i   -> name_s^(string_of_int i)
       | Tuple (f,s) -> name_s^(string_of_int f)^","^(string_of_int s)
 
-
-
   (* for parsing arg values from a string. note that the parser here
      will be kinda picky in that each arg must have a space following
      the arg, i.e  -b 5 works but -b5 does not *)
@@ -508,6 +526,32 @@ struct
     ("-l", Arg.String (make_tup_arg  "l"), "");
   ]
 
+  let sort_order (arg,value) =
+    match arg with
+      | "b" -> 1
+      | "r" -> 0
+      | "p" -> 2
+      | "m" -> 3
+      | "e" -> 4
+      | "f" -> 5
+      | "y" -> 6
+      | "z" -> 7
+      | "t" -> 8
+      | "c" -> 9
+      | "i" -> 10
+      | "w" -> 11
+      | "s" -> 12
+      | "g" -> 13
+      | "o" -> 14
+      | "a" -> 15
+      | "l" -> 16
+      | _ -> failwith ("unknown arg: "^arg)
+
+  let sorted_order (args : chow_arg list) =
+    List.sort (fun arg1 arg2 ->
+      compare (sort_order arg1) (sort_order arg2)
+    ) args
+
   let from_string str  : chow_arg list =
     let split = Array.of_list ("dummy"::(Str.split spaces str)) in
     arg_accum := [];
@@ -528,22 +572,21 @@ struct
   type t = {
     fixed_args : chow_arg list;
     adaptable_args : ChowArgs.spec list;
+    fb : (resident,fit_result) fitness_bundle;
   }
-  type description = (chow_arg list * ChowArgs.spec list)
+  type description = (chow_arg list * ChowArgs.spec list * cache)
 
-  let create (fixed, adaptable) = {
-    fixed_args = fixed;
-    adaptable_args  = adaptable;
-  }
-  
+ 
   (* could use buf for more efficency here *)
   let join lst sep to_s = 
-    List.fold_left (fun acc mem -> acc ^ sep ^ (to_s mem)) "" lst
-    
+      List.fold_left ( fun acc mem -> 
+        acc ^ sep ^ (to_s mem)
+      ) (to_s (List.hd lst)) (List.tl lst)
+   
   (* convet the resident to a format usable with external fitness *)
   let to_extern (resident : resident) : ExternalFitness.rep =
     List.map (fun (file, args) -> 
-      (file, join args " " ChowArgs.to_string)
+      (file, join (ChowArgs.sorted_order args) " " ChowArgs.to_string)
     ) resident
 
   (* convet the resident from format used by external fitness *)
@@ -618,10 +661,8 @@ struct
         file, (change_random_arg hood arglist)
     ) resident
     
-  (* chow neighborhoods can all use the same fitness *)
-  let fitbun = 
-    FunctionSpecificFitness.make to_extern from_extern
-  let fitness (hood : t) = fitbun
+  (* fitness *)
+  let fitness (hood : t) = hood.fb
 
   let random_resident hood files : resident = 
     List.map (fun file ->
@@ -633,6 +674,13 @@ struct
       (file, hood.fixed_args @ adaptables)
     ) files
     
+  (* create *)
+  let create (fixed, adaptable, cache) = {
+    fixed_args = fixed;
+    adaptable_args  = adaptable;
+    fb = FunctionSpecificFitness.make ~cache:cache to_extern from_extern
+  }
+ 
 end
 
 (* benchmark specific neighbordhoods *)
@@ -692,7 +740,8 @@ struct
   ]
 end
 
-let chood = ChowHood.create (ChowChoices.fixed, ChowChoices.adaptable)
+let chood = ChowHood.create 
+  (ChowChoices.fixed, ChowChoices.adaptable, NeverCache.make_cache "")
 module HCC = HillClimber(ChowHood)
 
 
