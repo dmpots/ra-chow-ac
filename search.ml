@@ -1,3 +1,136 @@
+(* Caching mechanisms *)
+type cache = {
+  find : string -> string -> float option;
+  add  : string -> string -> float -> unit;
+}
+
+module type CACHE =
+sig
+  type t
+  val create : string -> t
+  val find   : t -> string -> string ->  float option
+  val add    : t -> string -> string ->  float -> unit
+  val make_cache : string -> cache
+end
+
+module NeverCache : CACHE =
+struct
+  type t = unit
+  let create _ = ()
+  let find _ _ _  = None 
+  let add _ _ _ _  = () 
+
+  let make_cache _ = {
+    find = find ();
+    add  = add ();
+  }
+end
+
+module ListCache : CACHE =
+struct
+  type t = {
+    mutable c : (string*string*float) list;
+  }
+  let create _ = {c=[]}
+  let find c s1 s2 =
+    try
+      let _,_,f =
+        List.find (fun (s', s'', _) -> (s' = s1 && s'' = s2)) c.c
+      in
+      Some f
+    with Not_found -> None
+
+  let add c s1 s2 f = c.c <- ((s1,s2,f)::c.c)
+
+  let make_cache s = 
+    let c = create s in 
+    {
+      find = find c;
+      add  = add c;
+    }
+end
+
+module DbCache  : CACHE =
+struct
+  type t = Sqlite3.db
+
+  module Rc = Sqlite3.Rc
+  let schema ="
+CREATE TABLE cache (
+  id        INTEGER PRIMARY KEY,
+  filename  VARCHAR,
+  args      VARCHAR,
+  fitness   FLOAT,
+  hits      INTEGER DEFAULT 0
+);
+"
+  (* helpers *)
+  let atoi = int_of_string
+  let sql_fail status = failwith ("sql failed: "^(Rc.to_string status))
+  let assert_ok status retval = 
+    match status with
+      | Rc.OK -> retval
+      | _ -> sql_fail status
+
+  (* create *)
+  let create file = 
+    let need_schema = not (Sys.file_exists file) in
+    let db = Sqlite3.db_open file in
+    if need_schema then 
+      let status = Sqlite3.exec db schema in assert_ok status db
+    else
+      db
+
+  let update_hits db (fitness,hits, row_id) = 
+    match fitness with
+      | None -> None
+      | Some(fit) -> 
+        (* update hits column *)
+        let sql = Printf.sprintf "
+          UPDATE cache set hits = %d where id = %d
+        " (hits+1) row_id
+        in
+        let _ = assert_ok (Sqlite3.exec db sql) () in fitness
+
+  (* find *)
+  let find db file args = 
+    let sql = Printf.sprintf "
+      SELECT fitness,hits,id FROM cache 
+      WHERE filename = '%s' 
+      AND args = '%s'
+      LIMIT 1;" file args
+    in
+    let hit = ref (None,-1, -1) in
+    let status = 
+      Sqlite3.exec_not_null_no_headers db ~cb:(fun row ->
+        hit := (Some(float_of_string row.(0)), atoi row.(1), atoi row.(2))
+      ) sql
+    in
+    let _ = assert_ok status () in
+    update_hits db !hit
+
+  (* add *)
+  let add db file args fitness = 
+    let sql = Printf.sprintf "
+      INSERT INTO cache(filename,args,fitness) VALUES ('%s','%s',%.2f);
+      " file args fitness
+    in
+    assert_ok (Sqlite3.exec db sql) ()
+
+
+  (* make_cache *)
+  let make_cache file =
+    let db = create file in
+    {
+      find = find db;
+      add = add db;
+    }
+end
+
+
+(* fitness bundle is used to group together fitness functions used in
+   searching. this bundle is defined by the neighborhood in which the
+   searching is taking place *)
 type ('a, 'b) fitness_bundle = {
   fitness : 'a -> 'b;
   best_fitness : 'a list -> 'a * 'b;
@@ -62,23 +195,19 @@ struct
   let count_chars goal accum ch =
     if ch = goal then incr(accum) 
 
-  let fitness resident = 
+  let fitness cache resident =
     let fit = ref 0 in
     let _ = String.iter (count_chars 'd' fit) resident in
     float_of_int !fit
 
-  let mass_fitness residents =
-    let fits = List.map fitness residents in
-    List.combine residents fits
-
-  let best_fitness residents =
-    let res_fits = mass_fitness residents in
+  let best_fitness cache residents = 
+    let res_fits = List.combine residents (List.map (fitness cache) residents) in
     let sorted = List.sort (fun (_,f1) (_,f2) -> compare f2 f1) res_fits in
     List.hd sorted
 
-  let make () : (PassNeighborHood.resident, float) fitness_bundle = {
-    fitness=fitness; 
-    best_fitness=best_fitness;
+  let make cache : (PassNeighborHood.resident, float) fitness_bundle = {
+    fitness=fitness cache;
+    best_fitness=best_fitness cache;
     summarize = (fun x -> x);
   }
 end
@@ -163,7 +292,7 @@ module ExternalFitness =
 struct
   type rep = (string * string) list
   type output = string * string * float list
-  let extrn_prog = "run-tw"
+  let extrn_prog = "tw.rb"
   let sec_sep = "%"
   let line_sep = "|"
 
@@ -226,7 +355,7 @@ end
 module FunctionSpecificFitness = 
 struct
  (*---------------------------fun---------------------------------*) 
-  let fitness massage resident = 
+  let fitness cache massage resident = 
     let massaged = massage resident in
     let each_fun_marked = ExternalFitness.single_fitness massaged in 
     List.fold_left (fun (fits, sum) (file,pass,fit) -> 
@@ -236,7 +365,7 @@ struct
   (*---------------------------fun---------------------------------*) 
   (* find the fitness of each (function,pass) pair and choose the result
      to be a combination of the highest individual function pairs *)
-  let best_fitness massage unmassage residents =
+  let best_fitness cache massage unmassage residents =
     let better_than challenger champ = challenger < champ in
     (* make sure the residents are in a form suitable for use with the
        External fitness module *)
@@ -270,9 +399,11 @@ struct
   (* probably change this to pass in the external fitness function to
      use and curry the fitness functions to take that as the first
      param *)
-  let make massage unmassage = {
-    fitness=fitness massage; 
-    best_fitness=best_fitness massage unmassage;
+  let make ?cache:(cache=NeverCache.make_cache("")) 
+    massage unmassage = 
+  {
+    fitness=fitness cache massage; 
+    best_fitness=best_fitness cache massage unmassage;
     summarize = (fun (_, sum) -> sum)
   }
 end
@@ -514,7 +645,7 @@ module HC = HillClimber(PassNeighborHood)
 
 (* function specific neighbordhoods *)
 let id = (fun x -> x)
-let ffb = FunctionSpecificFitness.make id id
+let ffb = FunctionSpecificFitness.make ~cache:(ListCache.make_cache "") id id
 let fh = FunctionPassHood.create (passes, ffb);;
 let tests2 = [
   [("seval.i", "abcdefg"); ("spline.i", "abdeftg")];

@@ -16,9 +16,9 @@ COMPFLAGS = str.cma unix.cma
 EXECUTABLE=ac
 
 #OCAML PROGRAMS
-SW_OCAMLDIR=/home/dmp4866/sw/bin/
+SW_OCAMLDIR=/home/dmp4866/sw/bin
 SW_OCAMLLIB=/home/dmp4866/sw/lib/ocaml
-HOME_OCAMLDIR=/usr/bin/
+HOME_OCAMLDIR=/usr/bin
 HOME_OCAMLLIB=/usr/lib/ocaml
 MAC_OCAMLDIR=/opt/local/bin
 MAC_OCAMLLIB=/opt/local/lib/ocaml
@@ -41,12 +41,14 @@ OCAMLDIR=$(HOME_OCAMLDIR)
 #============================================================
 #SHOULD NOT NEED TO CHANGE THESE ONCE SETUP CORRECTLY ABOVE
 #============================================================
+OCAMLFIND=$(OCAMLDIR)/ocamlfind
 OCAML=$(OCAMLDIR)/ocaml
 OCAMLOPT=$(OCAMLDIR)/ocamlopt
 OCAMLDEBUG=$(OCAMLDIR)/ocamldebug
 OCAMLC=$(OCAMLDIR)/ocamlc
 CAMLP4=$(OCAMLDIR)/camlp4o
-RLWRAP=
+RLWRAP=rlwrap
+PACKAGES=-package str -package unix -package sqlite3 -linkpkg
 
 # (Default) Option to list targets
 default: $(EXECUTABLE)
@@ -71,7 +73,7 @@ clean:
 #	$(RLWRAP) $(OCAML) -I src/ src/library.cma
 
 top: $(LIBTARGETS)
-	@ ocamlmktop -custom -o ttop str.cma unix.cma $(LIBTARGETS)
+	@ $(OCAMLFIND) ocamlmktop -o ttop $(PACKAGES) $(LIBTARGETS)
 	$(RLWRAP) ttop
 
 debug: $(EXECUTABLE)
@@ -83,7 +85,9 @@ debug: $(EXECUTABLE)
 #	@ echo " -- make $(EXECUTABLE) (Done)"
 
 $(EXECUTABLE): $(LIBTARGETS) $(PACWAR_O) main.cmo
-	@ $(OCAMLC) $(COMPFLAGS) $(LIBTARGETS) -o $(EXECUTABLE) main.cmo
+	  $(OCAMLFIND) ocamlc  $(LIBTARGETS) \
+    $(PACKAGES) \
+    -o $(EXECUTABLE) main.cmo
 	@ echo " -- make $(EXECUTABLE) (Done)"
 
 opt: $(OPTTARGETS) main.cmx
@@ -104,7 +108,7 @@ depend: $(SRCFILES)
 	@ $(OCAMLOPT) str.cmx unix.cmx -c $<
 	@ echo " -- make $< (Done)"
 .ml.cmo: 
-	@ $(OCAMLC) $(COMPFLAGS) -c $<
+	@ $(OCAMLFIND) ocamlc $(PACKAGES) -c $<
 	@ echo " -- make $< (Done)"
 .mli.cmi:
 	@ $(OCAMLC) $(COMPFLAGS) -c $<
