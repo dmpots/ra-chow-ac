@@ -63,6 +63,8 @@ CREATE TABLE cache (
   fitness   FLOAT,
   hits      INTEGER DEFAULT 0
 );
+
+CREATE INDEX cache_args_index ON cache(args);
 "
   (* helpers *)
   let atoi = int_of_string
@@ -428,19 +430,42 @@ struct
   }
 end
 
+
+module Logger =
+struct
+  type t = out_channel
+
+  let date_stamp () =
+    let tm = Unix.localtime (Unix.time ()) in
+    Printf.sprintf "[%d/%02d/%02d %02d:%02d:%02d] "
+        (tm.Unix.tm_year+1900) (tm.Unix.tm_mon+1) tm.Unix.tm_mday
+            tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
+
+  let logger chan  msg = 
+    output_string chan "L,";
+    output_string chan (date_stamp ());
+    output_string chan msg; 
+    output_string chan "\n"; 
+    flush chan
+
+end
 module HillClimber (N : NEIGHBORHOOD) =
 struct
+  let fmt = Printf.sprintf 
+
+  let summ hood = (N.fitness hood).summarize  
   let better_than_in_hood hood challenger champ = 
-    let summ = (N.fitness hood).summarize  in
+    let summ = summ hood in
     (summ challenger ) < (summ champ)
   let same_fitness_level hood challenger champ =
-    let summ = (N.fitness hood).summarize  in
+    let summ = summ hood in
     (summ challenger ) = (summ champ)
     
  (* right now low fitness is good so that opcount translates directly
      to fitness, but we could pass a function to compare fitness
      levels if we need high fitness to be good *)
-  let search (hood : N.t) (seed : N.resident) limit =
+  let search ?log:(logfile=stdout) (hood : N.t) (seed : N.resident) limit =
+    let logit = Logger.logger logfile in
     let patience = 2 in 
     let num_nebs evals = min 10 (limit - evals) in 
     let better_than = better_than_in_hood hood in
@@ -448,20 +473,24 @@ struct
     let rec do_search state curfit laterals evals =
       if evals >= limit then (state,curfit),evals else
       let num_new_nebs = num_nebs evals in
-      let num_new_evals = num_new_nebs + evals + 1 (*+1 for state*) in
+      let num_new_evals = num_new_nebs + evals in
+      logit (fmt "working up to %d evals" num_new_evals);
       let nebs = N.neighbors hood state num_new_nebs in
       let newstate,bestfit = best_fit (state::nebs) in
       if better_than bestfit curfit then (* low fitness is good *)
+        let _ = 
+          logit (fmt "found a better fitness: %.0f" (summ hood bestfit)) in
         do_search newstate bestfit laterals num_new_evals
       else
         if (same_fitness_level hood curfit bestfit) && laterals > 0 then
-          (*let _ = print_string ">> LATERAL\n" in*)
+          let _ = logit (fmt "same fitness, patience left: %d" laterals) in
           do_search newstate bestfit (laterals - 1) num_new_evals
         else (* only found worse neighbors *)
-            (*let _ = print_string "!SAME BEST\n" in*)
+          let _ = logit (fmt "no better neighbors found\n") in
           (state,bestfit),num_new_evals
     in
     let startfit = ((N.fitness hood).fitness) seed  in
+    logit (fmt "starting search with %d evals left" limit);
     do_search seed startfit patience 1
 end
 

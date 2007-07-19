@@ -13,6 +13,7 @@ let seed_val = ref(-1)
 let out_file = ref sentinal
 let benchmarks = ref []
 let cache = ref (NeverCache.make_cache "")
+let logger = ref stdout
 
 let set_alg a () = 
   match a with
@@ -24,6 +25,9 @@ let set_bench bench =
 
 let set_db db =
   cache := (DbCache.make_cache db)
+
+let set_log logfile =
+  logger := (open_out logfile)
 
 let not_set file_ref = !file_ref = sentinal
 
@@ -39,6 +43,7 @@ let parse_args () =
      ("-seed", Arg.Set_int seed_val , "random number generator seed");
      ("-out", Arg.Set_string out_file, "output file");
      ("-db", Arg.String set_db , "database file");
+     ("-log", Arg.String set_log , "log file (defaults to stdout)");
     ]
   in
   let usage = "ac -run <benchmark> [-limit n] [-hc] [-seed n] [-out file]" in
@@ -50,7 +55,7 @@ let parse_args () =
     Arg.usage args usage;
     exit 2
 
-let build_search lim alg seed out_file cache =
+let build_search lim alg seed out_file cache logger =
   (* search params *)
   let _ = if seed <> -1 then Random.init seed else Random.self_init () in
   let outchan = if out_file = ""  then stdout else open_out out_file in
@@ -59,7 +64,7 @@ let build_search lim alg seed out_file cache =
     (ChowChoices.fixed, ChowChoices.adaptable, cache) in
   let searchfun = 
     match alg with
-      | HC -> HCC.search nhood
+      | HC -> HCC.search ~log:logger nhood
       | _ -> failwith "unsupported search algorithm"
   in
   (fun files -> 
@@ -70,7 +75,7 @@ let build_search lim alg seed out_file cache =
 
 let _ = 
   parse_args ();
-  let search = build_search !limit !alg !seed_val !out_file !cache in
+  let search = build_search !limit !alg !seed_val !out_file !cache !logger in
     List.iter (fun files ->
       let _ = search files in ()
     ) !benchmarks 

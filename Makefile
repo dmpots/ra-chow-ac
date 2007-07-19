@@ -85,13 +85,15 @@ debug: $(EXECUTABLE)
 #	@ echo " -- make $(EXECUTABLE) (Done)"
 
 $(EXECUTABLE): $(LIBTARGETS) $(PACWAR_O) main.cmo
-	  $(OCAMLFIND) ocamlc  $(LIBTARGETS) \
+	@ $(OCAMLFIND) ocamlc  $(LIBTARGETS) \
     $(PACKAGES) \
     -o $(EXECUTABLE) main.cmo
 	@ echo " -- make $(EXECUTABLE) (Done)"
 
 opt: $(OPTTARGETS) main.cmx
-	@ $(OCAMLOPT) -o $(EXECUTABLE)-opt str.cmxa unix.cmxa $(OPTTARGETS) main.cmx
+	@$(OCAMLFIND) ocamlopt -o $(EXECUTABLE)-opt \
+   $(PACKAGES) \
+   $(OPTTARGETS) main.cmx
 	@ echo " -- make $(EXECUTABLE)-opt (Done)"
 
 # Option to use ocamldep to dependecies automatically
@@ -105,7 +107,7 @@ depend: $(SRCFILES)
 # How to turn a ".ml" file into a ".cmo" file
 #.ml.cmx: $(<:.ml=.cmo) 
 .ml.cmx: 
-	@ $(OCAMLOPT) str.cmx unix.cmx -c $<
+	@ $(OCAMLFIND) ocamlopt $(PACKAGES) -c $<
 	@ echo " -- make $< (Done)"
 .ml.cmo: 
 	@ $(OCAMLFIND) ocamlc $(PACKAGES) -c $<
