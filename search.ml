@@ -1,299 +1,41 @@
-(* Caching mechanisms *)
-type cache = {
-  find : string -> string -> float option;
-  add  : string -> string -> float -> unit;
-}
+open Cache
 
-module type CACHE =
-sig
-  type t
-  val create : string -> t
-  val find   : t -> string -> string ->  float option
-  val add    : t -> string -> string ->  float -> unit
-  val make_cache : string -> cache
-end
-
-module NeverCache : CACHE =
-struct
-  type t = unit
-  let create _ = ()
-  let find _ _ _  = None 
-  let add _ _ _ _  = () 
-
-  let make_cache _ = {
-    find = find ();
-    add  = add ();
-  }
-end
-
-module ListCache : CACHE =
-struct
-  type t = {
-    mutable c : (string*string*float) list;
-  }
-  let create _ = {c=[]}
-  let find c s1 s2 =
-    try
-      let _,_,f =
-        List.find (fun (s', s'', _) -> (s' = s1 && s'' = s2)) c.c
-      in
-      Some f
-    with Not_found -> None
-
-  let add c s1 s2 f = c.c <- ((s1,s2,f)::c.c)
-
-  let make_cache s = 
-    let c = create s in 
-    {
-      find = find c;
-      add  = add c;
-    }
-end
-
-module DbCache  : CACHE =
-struct
-  type t = Sqlite3.db
-
-  module Rc = Sqlite3.Rc
-  let schema ="
-CREATE TABLE cache (
-  id        INTEGER PRIMARY KEY,
-  filename  VARCHAR,
-  args      VARCHAR,
-  fitness   FLOAT,
-  hits      INTEGER DEFAULT 0
-);
-
-CREATE INDEX cache_args_index ON cache(args);
-"
-  (* helpers *)
-  let atoi = int_of_string
-  let sql_fail status = failwith ("sql failed: "^(Rc.to_string status))
-  let assert_ok status retval = 
-    match status with
-      | Rc.OK -> retval
-      | _ -> sql_fail status
-
-  (* create *)
-  let create file = 
-    let need_schema = not (Sys.file_exists file) in
-    let db = Sqlite3.db_open file in
-    if need_schema then 
-      let status = Sqlite3.exec db schema in assert_ok status db
-    else
-      db
-
-  let update_hits db (fitness,hits, row_id) = 
-    match fitness with
-      | None -> None
-      | Some(fit) -> 
-        (* update hits column *)
-        let sql = Printf.sprintf "
-          UPDATE cache set hits = %d where id = %d
-        " (hits+1) row_id
-        in
-        let _ = assert_ok (Sqlite3.exec db sql) () in fitness
-
-  (* find *)
-  let find db file args = 
-    let sql = Printf.sprintf "
-      SELECT fitness,hits,id FROM cache 
-      WHERE filename = '%s' 
-      AND args = '%s'
-      LIMIT 1;" file args
-    in
-    let hit = ref (None,-1, -1) in
-    let status = 
-      Sqlite3.exec_not_null_no_headers db ~cb:(fun row ->
-        hit := (Some(float_of_string row.(0)), atoi row.(1), atoi row.(2))
-      ) sql
-    in
-    let _ = assert_ok status () in
-    update_hits db !hit
-
-  (* add *)
-  let add db file args fitness = 
-    let sql = Printf.sprintf "
-      INSERT INTO cache(filename,args,fitness) VALUES ('%s','%s',%.2f);
-      " file args fitness
-    in
-    assert_ok (Sqlite3.exec db sql) ()
-
-
-  (* make_cache *)
-  let make_cache file =
-    let db = create file in
-    {
-      find = find db;
-      add = add db;
-    }
-end
-
-
-(* fitness bundle is used to group together fitness functions used in
-   searching. this bundle is defined by the neighborhood in which the
-   searching is taking place *)
 type ('a, 'b) fitness_bundle = {
   fitness : 'a -> 'b;
   best_fitness : 'a list -> 'a * 'b;
   summarize : 'b -> float;
 }
 
-(* general neighborhood structure *)
-module type NEIGHBORHOOD =
-sig
-  type t 
-  type resident
-  type description
-  type fit_result
-  val create : description -> t
-  val neighbors : t -> resident -> int -> resident list
-  val random_neighbor : t -> resident -> resident
-  val fitness : t -> (resident,fit_result) fitness_bundle 
-end
 
-module PassNeighborHood =
-struct 
-  type resident = string
-  type fit_result = float
-  type t = {
-    all_passes : resident list;
-    fb    : (resident,fit_result) fitness_bundle
-  }
-  type description = resident list * (resident,float) fitness_bundle
-
-  (* change one letter in the pass string *)
-  let change_one = fun hood pass -> 
-    let newpass = String.copy pass in
-    let place1 = Random.int (String.length newpass) in
-    let place2 = Random.int (List.length hood.all_passes) in
-    let _ = 
-      String.set newpass place1 
-        (String.get (List.nth hood.all_passes place2) 0)
-    in
-    newpass
-
-  (* create the neighborhood *)
-  let create (passes, fitb) = {
-    all_passes = passes; 
-    fb = fitb;
-  }
-
-  (* new neighbors *)
-  let neighbors hood pass count = 
-    let len = Array.to_list (Array.make count pass) in
-    List.map (change_one hood) len
-
-  (* random neighbor *)
-  let random_neighbor hood = change_one hood 
-
-  (* fitness definitons *)
-  let fitness hood = hood.fb
-
-end
-
-module WeirdFitness =
-struct
-  let count_chars goal accum ch =
-    if ch = goal then incr(accum) 
-
-  let fitness cache resident =
-    let fit = ref 0 in
-    let _ = String.iter (count_chars 'd' fit) resident in
-    float_of_int !fit
-
-  let best_fitness cache residents = 
-    let res_fits = List.combine residents (List.map (fitness cache) residents) in
-    let sorted = List.sort (fun (_,f1) (_,f2) -> compare f2 f1) res_fits in
-    List.hd sorted
-
-  let make cache : (PassNeighborHood.resident, float) fitness_bundle = {
-    fitness=fitness cache;
-    best_fitness=best_fitness cache;
-    summarize = (fun x -> x);
-  }
-end
-
-
-
-module FunctionPassHood =
-struct 
-  type file = string
-  type passes = string
-  type resident = (file * passes) list
-  type fit_result = ((file * passes * float) list * float)
-  type t = {
-    all_passes : passes list;
-    fb    : (resident, fit_result) fitness_bundle
-  }
-  type description = passes list * (resident,fit_result) fitness_bundle
-
-  (* change one letter in the pass string *)
-  let change_one = fun hood pass -> 
-    let newpass = String.copy pass in
-    let place1 = Random.int (String.length newpass) in
-    let place2 = Random.int (List.length hood.all_passes) in
-    let _ = 
-      String.set newpass place1 
-        (String.get (List.nth hood.all_passes place2) 0)
-    in
-    newpass
-
-  (* change one in each of the files *)
-  let change_one_each_file = fun hood file_passes ->
-    List.map (fun (file, pass) -> (file, change_one hood pass)) file_passes
-
-  (* create the neighborhood *)
-  let create (passes, fitb) = {
-    all_passes = passes; 
-    fb = fitb;
-  }
-
-  (* new neighbors *)
-  (* find some new neighbors of the current state (file_passes) by
-     taking each file and transforming the pass associated with it.
-     This is done count number of times to make count neighbors.
-
-     example:
-      [("seval.i", "abc"); ("spline.i", "bdd")]
-      --> becomes -->
-      [[("seavl.i", "adc"); ("spline.i", "bcd")]; [("seval.i", ...]]
-  *)
-  let neighbors hood file_passes count = 
-    let len = Array.to_list (Array.make count file_passes) in
-    List.map (change_one_each_file hood) len
-
-  (* random neighbor *)
-  let random_neighbor = fun hood res -> 
-    List.map (fun (file,pass) -> (file, change_one hood pass)) res
-
-    
-  (* fitness definitons *)
-  let fitness hood = hood.fb
-end
-
-(* Access an external program for computing fitness. This is used to
- * run the iloc compiler and then use the operation count for the
- * fitness function.
- *
- * The i/o contract with external programs is as follows:
- * 1) INPUT consists of pairs (file: args) that are used as specific
- * input for that file. Once all files have been listed for a given
- * benchmark a line starting with % and containing nothing else is
- * written
- * 2) OUTPUT consists of triples containing file|opcount|args where
- * args are the args that were used for the file and opcount is the
- * operation count for those files and args. Once all output for a
- * given benchmark has been written, a line with a single % is
- * written. This will match up with the input given to the program.
- * 
- * If this contract is followed then the code below should work
- * correctly.
- ***)
+(*================================================================
+  = EXTERNAL FITNESS
+  ================================================================
+  - Computes fitness for neighborhoods that specify specific args per
+  - fuction.
+  - Access an external program for computing fitness. This is used to
+  - run the iloc compiler and then use the operation count for the
+  - fitness function.
+  -
+  -  The i/o contract with external programs is as follows:
+  - 1) INPUT consists of pairs (file: args) that are used as specific
+  - input for that file. Once all files have been listed for a given
+  - benchmark a line starting with % and containing nothing else is
+  - written
+  - 2) OUTPUT consists of triples containing file|opcount|args where
+  - args are the args that were used for the file and opcount is the
+  - operation count for those files and args. Once all output for a
+  - given benchmark has been written, a line with a single % is
+  - written. This will match up with the input given to the program.
+  - 
+  - If this contract is followed then the code below should work
+  - correctly.
+  --------------------------------------------------------------*)
 module ExternalFitness =
 struct
-  type rep = (string * string) list
-  type output = (string * string * float) list
+  type input_element = (string * string)
+  type output_element = (string * string * float)
+  type input = input_element list
+  type output = output_element list
   let extrn_prog = "run-tw"
   let sec_sep = "%"
   let line_sep = "|"
@@ -355,11 +97,15 @@ struct
     else List.hd (bulk_fitness [resident])
 end
 
+(*------------------------- FITNESS MODULE  ----------------------
+  - Computes fitness for neighborhoods that specify specific args per
+  - fuction.
+  --------------------------------------------------------------*)
 module FunctionSpecificFitness = 
 struct
   let puts s = print_string s; print_newline ()
 
-  let separate cache (massaged : ExternalFitness.rep) =
+  let separate cache (massaged : ExternalFitness.input) =
     List.fold_left (fun (repeats, news) (file,args) ->
       match (cache.find file args) with
         | None -> (repeats, (file,args)::news)
@@ -421,7 +167,7 @@ struct
   (* probably change this to pass in the external fitness function to
      use and curry the fitness functions to take that as the first
      param *)
-  let make ?cache:(cache=NeverCache.make_cache("")) 
+  let make ?cache:(cache=NoCache.make_cache("")) 
     massage unmassage = 
   {
     fitness=fitness cache massage; 
@@ -430,7 +176,282 @@ struct
   }
 end
 
+(*================================================================
+  = RANDOM LIST
+  ================================================================
+  - Module for functions that act randomly in some way on lists
+  ----------------------------------------------------------------*)
+module RandomList = 
+struct
+  let swap a i j =
+    let t = a.(i) in 
+      a.(i) <- a.(j); a.(j) <- t
 
+  (* chooses n values randomly from the passed list *)
+  let pick n from_list =
+    let a = Array.of_list from_list in
+    let size = Array.length a in
+    if n > size then raise (Invalid_argument "pick: n > size") else
+    let rec loop i ub picks =
+      if i = n then picks else
+      let _ = swap a (if ub = 0 then 0 else Random.int ub) ub in
+      loop (i+1) (ub-1) (a.(ub)::picks)
+    in
+    loop 0 (size-1) []
+end
+
+(*================================================================
+  = NEIGHBORHOOD
+  ================================================================
+  - General neighborhood structure
+  ----------------------------------------------------------------*)
+module type NEIGHBORHOOD2d=
+sig
+  type t 
+  type resident
+  type search_state
+  type fitness_input  = ExternalFitness.input
+  type fitness_output = ExternalFitness.output
+
+  val make_state : t -> resident -> search_state
+  val best_value : t -> search_state -> fitness_output
+  val get_next_eval : t -> search_state -> fitness_input * search_state
+  val apply_results : t -> search_state -> fitness_output -> search_state
+  val fitness : t -> fitness_input -> fitness_output
+end
+
+type 'state file_search_state = {
+  current : 'state;
+  fitness : float option;
+  best : ('state * float);
+  to_explore : 'state list;
+  neighbors : ('state * float) list;
+  restarts : int;
+  patience : float;
+  greedy : bool;
+  cache : Cache.cache;
+}
+
+module type SEARCHSPACE = 
+sig
+  type elem
+  val to_fitness_input   : elem -> ExternalFitness.input_element
+  val from_fitness_input : ExternalFitness.input_element -> elem
+  val random_point  : elem -> elem
+  val all_neighbors : elem -> elem list
+end
+
+module type PASSCONFIG =
+sig
+  val passes : string list
+end
+
+module PassSearchSpace(Config : PASSCONFIG) = 
+struct
+  type file = string
+  type args = string
+  type elem = file * args 
+
+  let to_fitness_input elem = elem
+  let from_fitness_input elem = elem
+  let random_point (file,arg) = 
+    (file, List.hd(RandomList.pick 1 Config.passes))
+  let all_neighbors (file,_) = 
+    List.map (fun a -> (file,a)) Config.passes 
+end
+
+(*
+ ===============================================================
+ = SINGLE FILE SEARCH
+ ================================================================
+ - Module for searching over params on just a single file in a
+ - benchmark.
+ ----------------------------------------------------------------
+ *)
+module SingleFileSearch(SS: SEARCHSPACE) = 
+struct
+(* ---------- space specific --------*)
+  type elem = SS.elem
+  let to_fitness_input   = SS.to_fitness_input
+  let from_fitness_input = SS.from_fitness_input
+  let random_point = SS.random_point
+  let all_neighbors = SS.all_neighbors
+(* ---------- space specific --------*)
+  type search_state = elem file_search_state
+
+  (* computation for number of neighbors to explore based on patience *)
+  let num_nebs_to_explore all patience = 
+      int_of_float (ceil ((float (List.length all) ) *.  patience)) 
+
+  (* choose random neighbors of the element. number based on patience *)
+  let choose_random_neighbors elem patience =
+    let all = all_neighbors elem in
+    RandomList.pick (num_nebs_to_explore all patience) all
+
+  (* make a new search state from the given values *)
+  let make_state (seed : elem) cache ~patience:patience ~greedy:greed = 
+    let state = {
+        current = seed;
+        fitness = None;
+        best    = seed, max_float;
+        to_explore = choose_random_neighbors seed patience;
+        neighbors = [];
+        restarts = 0;
+        patience = patience;
+        greedy = greed;
+        cache = cache;
+      }
+    in 
+    state
+
+  (* return either the current best or this neighbor as best whichever
+     is better *)
+  let  new_best state neighbor fit =
+    let _,bestfit = state.best in
+      if fit < bestfit then (neighbor,fit) else state.best
+    
+    
+  (* move the search state to have the neighbor be the current position *)
+  let move_to_neighbor neighbor fit state  =
+      { state with
+        current = neighbor;
+        fitness = Some fit;
+        to_explore = choose_random_neighbors neighbor state.patience;
+        neighbors = [];
+        best = new_best state neighbor fit }
+
+  (* record the fitness of the neighbor so that we may choose it later *)
+  let record_neighbor_fitness neighbor fit state =
+    { state with
+      neighbors = (neighbor,fit)::state.neighbors;
+      best = new_best state neighbor fit; }
+    
+  (* restart the search at a new random place in the space *)
+  let restart_search state = 
+    let new_start = random_point state.current in
+      {state with
+       current = new_start;
+       fitness = None;
+       to_explore = choose_random_neighbors new_start state.patience;
+       neighbors = [];
+       restarts = state.restarts + 1;}
+
+  (* return the fitness value for the curren state, raise exception if
+     the fitness has not yet been computed *)
+  let get_current_fitness state =  
+    match state.fitness with
+      | Some fit -> fit
+      | None -> failwith "oops, the current state has no fitness"
+
+  (* pick the next neighbor from the to_explore queue *)
+  let next_neighbor state = 
+    if state.to_explore = [] then (None, state)
+    else  
+      let hd = List.hd state.to_explore in
+      let new_state = {state with to_explore = List.tl state.to_explore;} in
+      (Some(hd), new_state)
+
+  (* pick best neighbor from all evaluated neighbors *)
+  let move_to_best_neighbor state =
+    let best,bestfit = 
+      List.fold_left (fun (best,bestfit) (neighbor,fit) ->
+        if fit < bestfit then (neighbor,fit) else (best,bestfit)
+      ) (List.hd state.neighbors) (List.tl state.neighbors)
+    in
+      move_to_neighbor best bestfit state
+
+  (* find a neighbor that has never been evaluated and return it or if
+     no such neighbor exists then return None.
+     to find an unevaluated neighbor:
+      look at queue, 
+      if queue is empty then return None
+        
+      else queue is not empty so look at top
+      if we have never seen this before
+        return this as the unevaluated neighbor
+      else 
+        if it is better and we are greedy then take it 
+        otherwise otherwise record the value and look at next value
+    *)
+  let rec find_unevaluated_neighbor state  =
+    let (neighbor,state) = next_neighbor state in
+    match neighbor with
+      | None -> None,state
+      | Some neb -> begin
+          let file,args = to_fitness_input neb in
+          match state.cache.find file args with
+            | None -> Some (file,args),state
+            | Some fit ->
+                let curfit = get_current_fitness state in
+                let new_state = 
+                  if fit < curfit && state.greedy then
+                    move_to_neighbor neb fit state 
+                  else
+                    record_neighbor_fitness neb fit state
+                in
+                  find_unevaluated_neighbor new_state 
+        end
+
+
+  (* return the next evalutation needed for the search *)
+  let rec get_next_eval state =
+    (* see if our current state needs its fitness computed *)
+    match state.fitness with
+      | None   -> (to_fitness_input state.current), state
+      | Some _ -> begin
+        (* find an unevaluated neighbor to explore *)
+        match find_unevaluated_neighbor state  with
+          | Some n,state' -> n, state'
+          | None,state' -> 
+              (* here is where we restart or pick the best neighbor *)
+              let new_state = 
+                if state'.greedy then restart_search state'
+                else move_to_best_neighbor state'
+              in
+              get_next_eval new_state 
+        end
+          
+  (* return the next evalutation needed for the search *)
+  let apply_results state (fitness_output : ExternalFitness.output_element) =
+    let (file,args,fitness) = fitness_output in
+    let elem = from_fitness_input (file,args) in
+      match state.fitness with 
+        | None -> assert (elem = state.current);
+            { state with 
+              fitness = Some(fitness);
+              best = new_best state elem fitness; } 
+        | Some curfit -> 
+            (* if this element is better and we are greedy then move
+               there *)
+            if fitness < curfit && state.greedy then
+              move_to_neighbor elem fitness state
+            else
+              record_neighbor_fitness elem fitness state
+end
+
+(*================================================================
+  =  SEARCH DRIVER
+  ================================================================
+  -
+  ----------------------------------------------------------------*)
+module HillClimber2d (N : NEIGHBORHOOD2d) = 
+struct
+  let search ?log:(logfile=stdout) (hood : N.t) (seed : N.resident) limit =
+    let rec do_search evals search_state =
+      if evals >= limit then (N.best_value hood search_state) else
+      let next_eval,new_state = N.get_next_eval hood search_state in
+      let fit_results = N.fitness hood next_eval in
+      let new_state' = N.apply_results hood new_state fit_results in
+      do_search (evals+1) new_state'
+    in
+    do_search 0 (N.make_state hood seed)
+end
+
+(*================================================================
+  = LOGGER
+  ================================================================
+  - Logging module
+  ----------------------------------------------------------------*)
 module Logger =
 struct
   type t = out_channel
@@ -449,51 +470,13 @@ struct
     flush chan
 
 end
-module HillClimber (N : NEIGHBORHOOD) =
-struct
-  let fmt = Printf.sprintf 
 
-  let summ hood = (N.fitness hood).summarize  
-  let better_than_in_hood hood challenger champ = 
-    let summ = summ hood in
-    (summ challenger ) < (summ champ)
-  let same_fitness_level hood challenger champ =
-    let summ = summ hood in
-    (summ challenger ) = (summ champ)
-    
- (* right now low fitness is good so that opcount translates directly
-     to fitness, but we could pass a function to compare fitness
-     levels if we need high fitness to be good *)
-  let search ?log:(logfile=stdout) (hood : N.t) (seed : N.resident) limit =
-    let logit = Logger.logger logfile in
-    let patience = 2 in 
-    let num_nebs evals = min 10 (limit - evals) in 
-    let better_than = better_than_in_hood hood in
-    let best_fit = (N.fitness hood).best_fitness in
-    let rec do_search state curfit laterals evals =
-      if evals >= limit then (state,curfit),evals else
-      let num_new_nebs = num_nebs evals in
-      let num_new_evals = num_new_nebs + evals in
-      logit (fmt "working up to %d evals" num_new_evals);
-      let nebs = N.neighbors hood state num_new_nebs in
-      let newstate,bestfit = best_fit (state::nebs) in
-      if better_than bestfit curfit then (* low fitness is good *)
-        let _ = 
-          logit (fmt "found a better fitness: %.0f" (summ hood bestfit)) in
-        do_search newstate bestfit laterals num_new_evals
-      else
-        if (same_fitness_level hood curfit bestfit) && laterals > 0 then
-          let _ = logit (fmt "same fitness, patience left: %d" laterals) in
-          do_search newstate bestfit (laterals - 1) num_new_evals
-        else (* only found worse neighbors *)
-          let _ = logit (fmt "no better neighbors found\n") in
-          (state,bestfit),num_new_evals
-    in
-    let startfit = ((N.fitness hood).fitness) seed  in
-    logit (fmt "starting search with %d evals left" limit);
-    do_search seed startfit patience 1
-end
 
+(*================================================================
+  = CHOW ARGS
+  ================================================================
+  - Definition of chow arguments
+  ----------------------------------------------------------------*)
 module ChowArgs = 
 struct
   type arg_choices = 
@@ -592,6 +575,11 @@ struct
 end
 
 
+(*--------------------------------------------------------------
+  - CHOW HOOD
+  --------------------------------------------------------------
+  - Chow specific neighborhood functions
+  --------------------------------------------------------------*)
 module ChowHood =
 struct
   open ChowArgs
@@ -613,13 +601,13 @@ struct
       ) (to_s (List.hd lst)) (List.tl lst)
    
   (* convet the resident to a format usable with external fitness *)
-  let to_extern (resident : resident) : ExternalFitness.rep =
+  let to_extern (resident : resident) : ExternalFitness.input =
     List.map (fun (file, args) -> 
       (file, join (ChowArgs.sorted_order args) " " ChowArgs.to_string)
     ) resident
 
   (* convet the resident from format used by external fitness *)
-  let from_extern (extrn_rep :ExternalFitness.rep) : resident =
+  let from_extern (extrn_rep :ExternalFitness.input) : resident =
     List.map (fun (file, args) ->
       (file, ChowArgs.from_string args)
     ) extrn_rep
@@ -712,28 +700,10 @@ struct
  
 end
 
-(* benchmark specific neighbordhoods *)
-let wfb = WeirdFitness.make () 
-let passes = ["a"; "b"; "c"; "d"; "g"; 
-              "l"; "m"; "n"; "o"; "p"; 
-              "q"; "r"; "s"; "t"; "v"; "z"]
-let ph = PassNeighborHood.create (passes, wfb);;
-module HC = HillClimber(PassNeighborHood)
 
-(* function specific neighbordhoods *)
-let id = (fun x -> x)
-let ffb = FunctionSpecificFitness.make ~cache:(ListCache.make_cache "") id id
-let fh = FunctionPassHood.create (passes, ffb);;
-let tests2 = [
-  [("seval.i", "abcdefg"); ("spline.i", "abdeftg")];
-  [("seval.i", "abddefg"); ("spline.i", "acdeftg")];
-  [("seval.i", "abddefs"); ("spline.i", "acdmftg")];
-  [("seval.i", "abedefs"); ("spline.i", "acdiofg")];
-]
-module HCF = HillClimber(FunctionPassHood)
-
-
-(* chow specific neighbordhoods *)
+(*---------------------- ADAPTABLE ARGS  -------------------------
+  - 
+  ----------------------------------------------------------------*)
 module ChowChoices = 
 struct
 
@@ -769,129 +739,9 @@ struct
   ]
 end
 
-let chood = ChowHood.create 
-  (ChowChoices.fixed, ChowChoices.adaptable, NeverCache.make_cache "")
-module HCC = HillClimber(ChowHood)
-
-
-let ars = ChowArgs.from_string "-r 32 -b 5 -l 2,2"
-let rezs : ChowHood.resident list = 
-List.map (fun config ->
-  List.map (fun (file, args) -> (file, ChowArgs.from_string args))config
-) [
-  [("seval.i", "-r 32 -b 5 -e"); ("spline.i", "-r 32 -b 6 -m")];
-]
-
-module Benchmarks = 
-struct
-  type benchmark = 
-    | Fmin
-    | Seval
-    | Rkf45
-    | Solve
-    | Svd
-    | Urand
-    | Zeroin
-    | Doduc
-    | Fpppp
-    | Matrix300
-    | Tomcatv
-    | Applu
-    | Wave5X
-
-  let valid_names = [
-    "fmin"; "seval"; "rkf45"; "solve"; "svd"; "urand"; "zeroin";
-    "doduc"; "matrix300"; "tomcatv"; 
-    "applu"; "wave5X"
-  ]
-  let from_name = function
-    | "fmin" -> Fmin
-    | "seval" -> Seval
-    | "rkf45" -> Rkf45
-    | "solve" -> Solve
-    | "svd" -> Svd
-    | "urand" -> Urand
-    | "zeroin" -> Zeroin
-    | "doduc" -> Doduc
-    | "fpppp" -> Fpppp
-    | "matrix300" -> Matrix300
-    | "tomcatv" -> Tomcatv
-    | "applu" -> Applu
-    | "wave5X" -> Wave5X
-    | _ as s -> failwith ("unknown benchmark "^s)
-
-  (* fmm *)
-  let svd = ["svd.i"]
-  let zeroin = ["zeroin.i"]
-  let solve = ["decomp.i"; "solve.i"]
-  let seval = ["seval.i"; "spline.i"]
-  let fmin = ["fmin.i"]
-  let rkf45 = ["fehl.i"; "rkfs.i"; "rkf45.i"]
-  let urand = ["urand.i"]
-
-  (* spec *)
-  let doduc = ["sortie.i"; "vgjyeh.i"; "colbur.i"; "dyeh.i";
-    "ihbtr.i"; "inisla.i"; "coeray.i"; "drigl.i"; "orgpar.i";
-    "pastem.i"; "supp.i"; "hmoy.i"; "inithx.i"; "saturr.i"; "prophy.i";
-    "x21y21.i"; "cardeb.i"; "bilsla.i"; "inter.i"; "ddeflu.i";
-    "paroi.i"; "iniset.i"; "integr.i"; "debico.i"; "drepvi.i"; "si.i";
-    "lissag.i"; "arret.i"; "subb.i"; "sigma.i"; "repvid.i"; "dcoera.i";
-    "bilan.i"; "yeh.i"; "debflu.i"; "deseco.i"; "inideb.i"; "heat.i";
-  ]
-  let fpppp = [
-    "intowp.i"; "fpppp.i"; "gamgen.i"; "ilsw.i";
-    "twldrv.i"; "nprio.i"; "fmtgen.i"; "efill.i"; "aclear.i";
-    "lclear.i"; "fmtset.i"
-  ]
-  let matrix300 = ["saxpy.i"; "sgemv.i"; "sgemm.i"]
-  let tomcatv = ["tomcatv.i"]
-
-  (* spec95X *)
-  let applu = [
-    "exact.i"; "buts.i"; "error.i"; "ssor.i"; "maxnorm.i";
-    "applu.i"; "verify.i"; "l2norm.i"; "jacu.i"; "erhs.i"; "jacld.i";
-    "setiv.i"; "rhs.i"; "pintgr.i"; "setbv.i"; "blts.i"
-  ]
-
-  let wave5X = [
-    "injbatX.i"; "vslv1pX.i"; "ecrdX.i"; "bcndbX.i";
-    "linjX.i"; "sinqbX.i"; "cosqiX.i"; "smoothX.i"; "erfX.i";
-    "lasdenX.i"; "sinqfX.i"; "sinqiX.i"; "cosqfX.i"; "getbX.i";
-    "fftfX.i"; "tpartX.i"; "radfgX.i"; "putdtX.i"; "rfftb1X.i";
-    "rffti1X.i"; "transX.i"; "radb4X.i"; "abrtX.i"; "cosqbX.i";
-    "denitrX.i"; "fftbX.i"; "recreX.i"; "cosqf1X.i"; "solv2yX.i";
-    "energyX.i"; "rfftbX.i"; "radb5X.i"; "rinjX.i"; "genprbX.i";
-    "pdiagX.i"; "densX.i"; "radb2X.i"; "rfftfX.i"; "rfftiX.i";
-    "ranfX.i"; "advbndX.i"; "radb3X.i"; "vnewlX.i"; "laserX.i";
-    "celbndX.i"; "parmovX.i"; "denitlX.i"; "clrdtX.i"; "bcndX.i";
-    "putbX.i"; "tcompX.i"; "fieldX.i"; "rfftf1X.i"; "sudtblX.i";
-    "genbX.i"; "radf4X.i"; "diagnsX.i"; "waveX.i"; "setbX.i";
-    "parmvrX.i"; "radf5X.i"; "densxX.i"; "radf2X.i"; "getdtX.i";
-    "injallX.i"; "densyX.i"; "setinjX.i"; "radf3X.i"; "ecwrX.i";
-    "bcndtX.i"; "laspowX.i"; "radbgX.i"; "ibinX.i"; "initX.i";
-    "bcndrX.i"; "parmveX.i"; "endrunX.i"; "bcndlX.i"; "injchkX.i";
-    "injconX.i"; "vavgX.i"; "rewdtX.i"; "vslv1xX.i"; "inibndX.i";
-    "cosqb1X.i"; "slv2xyX.i"; "jobtimX.i"; "numbX.i"; "denptX.i"
-  ]
-
-  let get_files_from_name s =
-    match (from_name s) with
-      | Fmin -> fmin
-      | Seval -> seval
-      | Rkf45 -> rkf45
-      | Solve -> solve
-      | Svd   -> svd
-      | Urand  -> urand
-      | Zeroin -> zeroin
-      | Doduc -> doduc
-      | Fpppp -> fpppp
-      | Matrix300 -> matrix300
-      | Tomcatv -> tomcatv
-      | Applu -> applu
-      | Wave5X -> wave5X
- 
-end
-
+(*---------------------- SAVING SOLUTIONS ------------------------
+  - 
+  ----------------------------------------------------------------*)
 (* module for saving solutions for some definition of saving *)
 module ChowSolution =
 (
@@ -923,6 +773,9 @@ sig
 end
 )
 
+(*---------------------- SEARCH INTERFACE ------------------------
+  - 
+  ----------------------------------------------------------------*)
 (* perform the search *limit* times on problems of size *size* *)
 let iter_search ~limit search seed save next =
   let rec do_search n start =
@@ -932,4 +785,31 @@ let iter_search ~limit search seed save next =
       let seed' = next solution in do_search (n-evals) seed'
   in
   do_search limit seed
+
+
+(*--------------------------- HOODS ------------------------------
+  - 
+  ----------------------------------------------------------------*)
+(* function specific neighbordhoods *)
+let passes = ["a"; "b"; "c"; "d"; "g"; 
+              "l"; "m"; "n"; "o"; "p"; 
+              "q"; "r"; "s"; "t"; "v"; "z"]
+let id = (fun x -> x)
+let ffb = FunctionSpecificFitness.make ~cache:(ListCache.make_cache "") id id
+
+module HCC=
+struct
+  let search ~log:logger nhood blah d = 
+    ((["",[]], ([],0.0)), 0)
+end
+
+
+(* -------------------------- FOR TESTING ------------------------*)
+let my_passes = ["a"; "b"; "c"; "d"; "e"; "f"; "g"];
+module SF = 
+  SingleFileSearch(PassSearchSpace(struct let passes = my_passes end))
+let state =  SF.make_state ("fmin.i", "abcd") Cache.no_cache ~patience:0.5 ~greedy:false;; 
+let state2 = {state with fitness = Some 100.0}
+let state' = SF.apply_results state ("fmin.i", "abcd", 22.0);;
+let (_,state'') = SF.get_next_eval state'
 

@@ -1,4 +1,6 @@
 open Search
+open Cache
+open Benchmarks
 
 (* command line arguments *)
 type algorithm = 
@@ -12,7 +14,7 @@ let alg = ref HC
 let seed_val = ref(-1)
 let out_file = ref sentinal
 let benchmarks = ref []
-let cache = ref (NeverCache.make_cache "")
+let cache = ref (NoCache.make_cache "")
 let logger = ref stdout
 
 let set_alg a () = 

@@ -1,5 +1,7 @@
 # All program source code
-SRCFILES = search.ml\
+SRCFILES = benchmarks.ml\
+           cache.ml\
+           search.ml\
 
 
 # All targets for the program
