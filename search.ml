@@ -288,6 +288,10 @@ struct
     let all = all_neighbors elem in
     RandomList.pick (num_nebs_to_explore all patience) all
 
+  (* query the cache to see if the element is present *)
+  let lookup_fitness cache elem =
+    let file,args = to_fitness_input elem in cache.find file args
+
   (* make a new search state from the given values *)
   let make_state (seed : elem) cache ~patience:patience ~greedy:greed = 
     let state = {
@@ -352,13 +356,10 @@ struct
       (Some(hd), new_state)
 
   (* pick best neighbor from all evaluated neighbors *)
-  let move_to_best_neighbor state =
-    let best,bestfit = 
-      List.fold_left (fun (best,bestfit) (neighbor,fit) ->
-        if fit < bestfit then (neighbor,fit) else (best,bestfit)
-      ) (List.hd state.neighbors) (List.tl state.neighbors)
-    in
-      move_to_neighbor best bestfit state
+  let pick_best_neighbor state = 
+    List.fold_left (fun (best,bestfit) (neighbor,fit) ->
+      if fit < bestfit then (neighbor,fit) else (best,bestfit)
+    ) (List.hd state.neighbors) (List.tl state.neighbors)
 
   (* find a neighbor that has never been evaluated and return it or if
      no such neighbor exists then return None.
@@ -379,7 +380,7 @@ struct
       | None -> None,state
       | Some neb -> begin
           let file,args = to_fitness_input neb in
-          match state.cache.find file args with
+          match state.cache.find file args  with
             | None -> Some (file,args),state
             | Some fit ->
                 let curfit = get_current_fitness state in
@@ -397,7 +398,17 @@ struct
   let rec get_next_eval state =
     (* see if our current state needs its fitness computed *)
     match state.fitness with
-      | None   -> (to_fitness_input state.current), state
+      (* current state needs fitness recorded *)
+      | None   -> begin
+          (* lookup in the cache for the current state *)
+          match lookup_fitness state.cache state.current with
+            | None -> (to_fitness_input state.current), state
+            | Some fit -> get_next_eval 
+                {state with 
+                  fitness = Some fit;
+                  best = new_best state state.current fit; } 
+        end
+      (* current state already has fitness recorded *)
       | Some _ -> begin
         (* find an unevaluated neighbor to explore *)
         match find_unevaluated_neighbor state  with
@@ -406,7 +417,14 @@ struct
               (* here is where we restart or pick the best neighbor *)
               let new_state = 
                 if state'.greedy then restart_search state'
-                else move_to_best_neighbor state'
+                else 
+                  (* look at all evaluated neighbors. if one is better
+                     then move to it, else time to restart the search *)
+                  let bestneb,nebfit = pick_best_neighbor state' in
+                  if nebfit < (get_current_fitness state') then
+                    move_to_neighbor bestneb nebfit state'
+                  else
+                    restart_search state'
               in
               get_next_eval new_state 
         end
@@ -805,11 +823,28 @@ end
 
 
 (* -------------------------- FOR TESTING ------------------------*)
-let my_passes = ["a"; "b"; "c"; "d"; "e"; "f"; "g"];
+let my_passes = ["a"; "b"; "c"; "d"; "e"; "f"; "g"]
+let greedy = false
 module SF = 
   SingleFileSearch(PassSearchSpace(struct let passes = my_passes end))
-let state =  SF.make_state ("fmin.i", "abcd") Cache.no_cache ~patience:0.5 ~greedy:false;; 
+let state =  SF.make_state ("fmin.i", "abcd") Cache.no_cache ~patience:0.5 ~greedy:greedy;; 
 let state2 = {state with fitness = Some 100.0}
 let state' = SF.apply_results state ("fmin.i", "abcd", 22.0);;
 let (_,state'') = SF.get_next_eval state'
+
+let ten = ChowChoices.upto 9 1 
+let five = ChowChoices.upto 5 1 
+let fits  = [4.76; 75.7; 14.89; 96.58; 32.12; 2.32]
+let gfits = [30.0; 20.0; 10.0; 15.0; 50.0; 25.0]
+
+let apply state times fits = 
+  let next_fit i = List.nth fits i in
+  List.fold_left (fun (state, states) i -> 
+    let ((file,args), state') = SF.get_next_eval state in
+    let fit = next_fit i in
+    Printf.printf "APPLIED EVAL: %s,%s %.2f\n" file args fit;
+    let state'' = SF.apply_results state' (file, args, fit) in
+    state'',state''::states
+  ) (state, []) times
+
 
