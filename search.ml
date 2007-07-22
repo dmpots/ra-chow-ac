@@ -8,28 +8,28 @@ type ('a, 'b) fitness_bundle = {
 
 
 (*================================================================
-  = EXTERNAL FITNESS
-  ================================================================
-  - Computes fitness for neighborhoods that specify specific args per
-  - fuction.
-  - Access an external program for computing fitness. This is used to
-  - run the iloc compiler and then use the operation count for the
-  - fitness function.
-  -
-  -  The i/o contract with external programs is as follows:
-  - 1) INPUT consists of pairs (file: args) that are used as specific
-  - input for that file. Once all files have been listed for a given
-  - benchmark a line starting with % and containing nothing else is
-  - written
-  - 2) OUTPUT consists of triples containing file|opcount|args where
-  - args are the args that were used for the file and opcount is the
-  - operation count for those files and args. Once all output for a
-  - given benchmark has been written, a line with a single % is
-  - written. This will match up with the input given to the program.
-  - 
-  - If this contract is followed then the code below should work
-  - correctly.
-  --------------------------------------------------------------*)
+ * EXTERNAL FITNESS
+ *===============================================================
+ * Computes fitness for neighborhoods that specify specific args per
+ * fuction.
+ * Access an external program for computing fitness. This is used to
+ * run the iloc compiler and then use the operation count for the
+ * fitness function.
+ *
+ *  The i/o contract with external programs is as follows:
+ * 1) INPUT consists of pairs (file: args) that are used as specific
+ * input for that file. Once all files have been listed for a given
+ * benchmark a line starting with % and containing nothing else is
+ * written
+ * 2) OUTPUT consists of triples containing file|opcount|args where
+ * args are the args that were used for the file and opcount is the
+ * operation count for those files and args. Once all output for a
+ * given benchmark has been written, a line with a single % is
+ * written. This will match up with the input given to the program.
+ * 
+ * If this contract is followed then the code below should work
+ * correctly.
+ *-------------------------------------------------------------*)
 module ExternalFitness =
 struct
   type input_element = (string * string)
@@ -97,10 +97,12 @@ struct
     else List.hd (bulk_fitness [resident])
 end
 
-(*------------------------- FITNESS MODULE  ----------------------
-  - Computes fitness for neighborhoods that specify specific args per
-  - fuction.
-  --------------------------------------------------------------*)
+(*================================================================
+ * FUNCTION SPECIFIC FITNESS
+ *===============================================================
+ * Computes fitness for neighborhoods that specify specific args per
+ * fuction.
+ *)
 module FunctionSpecificFitness = 
 struct
   let puts s = print_string s; print_newline ()
@@ -177,10 +179,10 @@ struct
 end
 
 (*================================================================
-  = RANDOM LIST
-  ================================================================
-  - Module for functions that act randomly in some way on lists
-  ----------------------------------------------------------------*)
+ * RANDOM LIST
+ *===============================================================
+ * Module for functions that act randomly in some way on lists
+ *---------------------------------------------------------------*)
 module RandomList = 
 struct
   let swap a i j =
@@ -204,10 +206,10 @@ struct
 end
 
 (*================================================================
-  = NEIGHBORHOOD
-  ================================================================
-  - General neighborhood structure
-  ----------------------------------------------------------------*)
+ * NEIGHBORHOOD
+ *================================================================
+ * General neighborhood structure
+ *---------------------------------------------------------------*)
 module type NEIGHBORHOOD2d=
 sig
   type t 
@@ -223,6 +225,24 @@ sig
   val fitness : t -> fitness_input -> fitness_output
 end
 
+module type SEARCHSPACE = 
+sig
+  type elem
+  val to_fitness_input   : elem -> ExternalFitness.input_element
+  val from_fitness_input : ExternalFitness.input_element -> elem
+  val random_point  : elem -> elem
+  val all_neighbors : elem -> elem list
+end
+
+
+(*===============================================================
+ * SINGLE FILE SEARCH
+ *===============================================================
+ * Module for searching over params on just a single file in a
+ * benchmark.
+ *---------------------------------------------------------------
+ *)
+(* type for encapsulating the state of a search *)
 type 'state file_search_state = {
   current : 'state;
   fitness : float option;
@@ -235,24 +255,7 @@ type 'state file_search_state = {
   cache : Cache.cache;
 }
 
-module type SEARCHSPACE = 
-sig
-  type elem
-  val to_fitness_input   : elem -> ExternalFitness.input_element
-  val from_fitness_input : ExternalFitness.input_element -> elem
-  val random_point  : elem -> elem
-  val all_neighbors : elem -> elem list
-end
-
-
-(*
- ===============================================================
- = SINGLE FILE SEARCH
- ================================================================
- - Module for searching over params on just a single file in a
- - benchmark.
- ----------------------------------------------------------------
- *)
+(* search module *)
 module SingleFileSearch(SS: SEARCHSPACE) = 
 struct
 (* ---------- space specific --------*)
@@ -433,10 +436,10 @@ struct
 end
 
 (*================================================================
-  =  SEARCH DRIVER
-  ================================================================
-  -
-  ----------------------------------------------------------------*)
+ *  SEARCH DRIVER
+ *===============================================================
+ *
+ *---------------------------------------------------------------*)
 module HillClimber2d (N : NEIGHBORHOOD2d) = 
 struct
   let search ?log:(logfile=stdout) (hood : N.t) (seed : N.resident) limit =
@@ -451,10 +454,10 @@ struct
 end
 
 (*================================================================
-  = LOGGER
-  ================================================================
-  - Logging module
-  ----------------------------------------------------------------*)
+ * LOGGER
+ *================================================================
+ * Logging module
+ *---------------------------------------------------------------*)
 module Logger =
 struct
   type t = out_channel
@@ -476,10 +479,11 @@ end
 
 
 (*================================================================
-  = CHOW ARGS
-  ================================================================
-  - Definition of chow arguments
-  ----------------------------------------------------------------*)
+ * CHOW ARGS
+ *===============================================================
+ * Definition of arguments that are passed to the chow allocator and
+ * their internal representation in the search program.
+ *---------------------------------------------------------------*)
 module ChowArgs = 
 struct
   type arg_choices = 
@@ -732,9 +736,12 @@ struct
 end
 
 
-(*---------------------- ADAPTABLE ARGS  -------------------------
-  - 
-  ----------------------------------------------------------------*)
+(*===============================================================
+ * CHOW CHOICES
+ *===============================================================
+ * Module containing the definition of paramerters that can be adapted
+ * for the chow register allocator.
+ *)
 module ChowChoices = 
 struct
 
@@ -818,34 +825,24 @@ let iter_search ~limit search seed save next =
   do_search limit seed
 
 
-(*--------------------------- HOODS ------------------------------
-  - 
-  ----------------------------------------------------------------*)
-(* function specific neighbordhoods *)
-let passes = ["a"; "b"; "c"; "d"; "g"; 
-              "l"; "m"; "n"; "o"; "p"; 
-              "q"; "r"; "s"; "t"; "v"; "z"]
-let id = (fun x -> x)
-let ffb = FunctionSpecificFitness.make ~cache:(ListCache.make_cache "") id id
-
-module HCC=
-struct
-  let search ~log:logger nhood blah d = 
-    ((["",[]], ([],0.0)), 0)
-end
-
 (* ---------------------- SEARCH SPACES ----------------------*)
-(*
- ===============================================================
- = PASS SEARCH SPACE
- ================================================================
- - Module containing the definition of the search space used to find
- - good sequences of optimizations for the iloc compiler.
- ----------------------------------------------------------------
+(*===============================================================
+ * PASS SEARCH SPACE
+ *===============================================================
+ * Module containing the definition of the search space used to find
+ * good sequences of optimizations for the iloc compiler.
+ *---------------------------------------------------------------
  *)
 module type PASSCONFIG =
 sig
   val passes : string list
+end
+
+module StdPass =
+struct
+let passes = ["a"; "b"; "c"; "d"; "g"; 
+              "l"; "m"; "n"; "o"; "p"; 
+              "q"; "r"; "s"; "t"; "v"; "z"]
 end
 
 module PassSearchSpace(Config : PASSCONFIG) = 
@@ -864,20 +861,12 @@ end
 
 
 (*
- ===============================================================
- = CHOW SEARCH SPACE
- ================================================================
- - Module containing the definition of the search space used to tune
- - the chow register allocator.
- ----------------------------------------------------------------
-module type SEARCHSPACE = 
-sig
-  type elem
-  val to_fitness_input   : elem -> ExternalFitness.input_element
-  val from_fitness_input : ExternalFitness.input_element -> elem
-  val random_point  : elem -> elem
-  val all_neighbors : elem -> elem list
-end
+ *==============================================================
+ * CHOW SEARCH SPACE
+ *===============================================================
+ * Module containing the definition of the search space used to tune
+ * the chow register allocator.
+ *---------------------------------------------------------------
  *)
 module type CHOWCONFIG =
 sig
@@ -938,6 +927,16 @@ struct
 end
 
 
+(*--------------------------- HOODS ------------------------------
+  -  DELETE THIS
+  ----------------------------------------------------------------*)
+module HCC=
+struct
+  let search ~log:logger nhood blah d = 
+    ((["",[]], ([],0.0)), 0)
+end
+
+
 (* -------------------------- FOR TESTING ------------------------*)
 let my_passes = ["a"; "b"; "c"; "d"; "e"; "f"; "g"]
 let greedy = false
@@ -979,6 +978,5 @@ let anyeq lst =
 module SFC = SingleFileSearch(CSS)
 let cs = SFC.make_state rp1 Cache.no_cache ~patience:0.5 ~greedy:true;; 
 let cs' = SFC.get_next_eval cs
-
 
 
