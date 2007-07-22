@@ -46,9 +46,10 @@ state. Each state is a setting of each of the params. Since there are
 one setting is changed at a time, otherwise there would be a
 combinatorial explosion and the number of neighbors would be too great.
 
-b - 16
-l - 328 (28 * 13)
+b - 11
+l - 406 (29 * 14)
 e - 2
+m - 2
 z - 2
 t - 2
 c - 4
@@ -57,9 +58,9 @@ g - 2
 o - 2
 a - 2
 ------
-418 total
+437 total
 
-
+Gives 426 neighbors since one value is excluded for each argument.
 
 
 

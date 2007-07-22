@@ -63,7 +63,7 @@ let build_search lim alg seed out_file cache logger =
   let outchan = if out_file = ""  then stdout else open_out out_file in
   let saver = ChowSolution.file outchan in
   let nhood = ChowHood.create 
-    (ChowChoices.fixed, ChowChoices.adaptable, cache) in
+    (ChowChoices.fixed_args, ChowChoices.adaptable_args, cache) in
   let searchfun = 
     match alg with
       | HC -> HCC.search ~log:logger nhood

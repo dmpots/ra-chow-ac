@@ -1,5 +1,6 @@
 # All program source code
 SRCFILES = benchmarks.ml\
+           util.ml\
            cache.ml\
            search.ml\
 

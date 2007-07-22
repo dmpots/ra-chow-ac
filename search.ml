@@ -198,6 +198,9 @@ struct
       loop (i+1) (ub-1) (a.(ub)::picks)
     in
     loop 0 (size-1) []
+
+  let random_choice lst = 
+    List.nth lst (Random.int (List.length lst)) 
 end
 
 (*================================================================
@@ -241,24 +244,6 @@ sig
   val all_neighbors : elem -> elem list
 end
 
-module type PASSCONFIG =
-sig
-  val passes : string list
-end
-
-module PassSearchSpace(Config : PASSCONFIG) = 
-struct
-  type file = string
-  type args = string
-  type elem = file * args 
-
-  let to_fitness_input elem = elem
-  let from_fitness_input elem = elem
-  let random_point (file,arg) = 
-    (file, List.hd(RandomList.pick 1 Config.passes))
-  let all_neighbors (file,_) = 
-    List.map (fun a -> (file,a)) Config.passes 
-end
 
 (*
  ===============================================================
@@ -587,9 +572,37 @@ struct
     arg_accum := [];
     Arg.parse_argv ~current:(ref 0) split all_args (fun _ -> ()) "";
     !arg_accum
+
+  let expand_choices (choices : arg_choices) : arg_val list =
+    match choices with
+      | BoolC bools -> List.map (fun b -> Bool b) bools
+      | IntC    ints -> List.map (fun i -> Int i) ints
+      | FloatC  floats -> List.map (fun f -> Float f) floats
+      | TupleC tups -> List.map (fun t -> Tuple t) tups
    
 (*  let change_random_arg (arg : chow_arg) =*)
     
+ (*  removes the choice from choices corresponding to the current
+     value of arg_val *)
+ let remove_choice arg_val choices = 
+   let filter_int_list n = function
+      | IntC cs -> List.filter (fun n' -> n <> n') cs
+      | _ -> failwith "oops should be int"
+    in
+    let filter_tuple_list tup = function
+      | TupleC cs -> List.filter (fun tup' -> tup <> tup') cs
+      | _ -> failwith "oops should be tuple"
+    in
+    let filter_float_list f = function
+      | FloatC cs -> List.filter (fun f' -> f <> f') cs
+      | _ -> failwith "oops should be float"
+    in
+    match arg_val with
+      | Bool b   -> BoolC [not b]
+      | Int i    -> IntC   (filter_int_list i choices)
+      | Float f  -> FloatC (filter_float_list f choices)
+      | Tuple t  -> TupleC (filter_tuple_list t choices)
+
 end
 
 
@@ -739,10 +752,10 @@ struct
     in
     List.rev (aux 0 [])
 
-  let fixed = [
+  let fixed_args = [
     ("r", ChowArgs.Int 32)
   ]
-  let adaptable = [
+  let adaptable_args = [
     ("b", ChowArgs.IntC [0;2;3;4;5;6;7;8;9;10;15]);
     ("l", ChowArgs.TupleC (combine (upto 28 1) (upto 26 2)));
     ("m", ChowArgs.BoolC  [true; false]);
@@ -821,6 +834,109 @@ struct
     ((["",[]], ([],0.0)), 0)
 end
 
+(* ---------------------- SEARCH SPACES ----------------------*)
+(*
+ ===============================================================
+ = PASS SEARCH SPACE
+ ================================================================
+ - Module containing the definition of the search space used to find
+ - good sequences of optimizations for the iloc compiler.
+ ----------------------------------------------------------------
+ *)
+module type PASSCONFIG =
+sig
+  val passes : string list
+end
+
+module PassSearchSpace(Config : PASSCONFIG) = 
+struct
+  type file = string
+  type args = string
+  type elem = file * args 
+
+  let to_fitness_input elem = elem
+  let from_fitness_input elem = elem
+  let random_point (file,arg) = 
+    (file, List.hd(RandomList.pick 1 Config.passes))
+  let all_neighbors (file,_) = 
+    List.map (fun a -> (file,a)) Config.passes 
+end
+
+
+(*
+ ===============================================================
+ = CHOW SEARCH SPACE
+ ================================================================
+ - Module containing the definition of the search space used to tune
+ - the chow register allocator.
+ ----------------------------------------------------------------
+module type SEARCHSPACE = 
+sig
+  type elem
+  val to_fitness_input   : elem -> ExternalFitness.input_element
+  val from_fitness_input : ExternalFitness.input_element -> elem
+  val random_point  : elem -> elem
+  val all_neighbors : elem -> elem list
+end
+ *)
+module type CHOWCONFIG =
+sig
+  val adaptable_args : ChowArgs.spec list
+  val fixed_args     : ChowArgs.chow_arg list
+end
+
+
+module ChowSearchSpace(Config : CHOWCONFIG)  =
+struct
+  open ChowArgs
+  type file = string
+  type elem = file * (chow_arg list)
+
+  (* convet the resident to a format usable with external fitness *)
+  let to_fitness_input (file, args) =
+    (file, Util.join (ChowArgs.sorted_order args) " " ChowArgs.to_string)
+
+  (* convet the resident to internal format *)
+  let from_fitness_input (file, arg_str) =
+    (file, ChowArgs.from_string arg_str)
+    
+
+  (* choose randomly among the valid choices for an arg *)
+  let take_random_choice (choices : arg_choices) : arg_val =
+    match choices with
+      | BoolC  lst -> Bool  (RandomList.random_choice lst)
+      | IntC   lst -> Int   (RandomList.random_choice lst)
+      | FloatC lst -> Float (RandomList.random_choice lst)
+      | TupleC lst -> Tuple (RandomList.random_choice lst)
+
+  (* return a random point in the search space *)
+  let random_point (file,_) =
+    let adaptables = 
+      List.map (fun (name, choices) -> 
+        (name, take_random_choice choices)
+      ) Config.adaptable_args
+    in
+    (file, Config.fixed_args @ adaptables)
+
+  (* return a all neighbors of a given element. neighbors of an
+     element are found by taking each arg and returing all valid values
+     for that arg, excluding the current choice for the arg. while
+     keeping the values for the other args fixed. *)
+  let all_neighbors ((file,args) : elem) : elem list =
+    let same_name name (n,_) = name = n in
+    let diff_name name (n,_) = name <> n in
+    List.fold_left (fun nebs (arg_name, arg_choices) ->
+      let (_,current_choice) = List.find (same_name arg_name) args in
+      let valid_choices = ChowArgs.remove_choice current_choice arg_choices in
+      let remaining_args = List.filter (diff_name arg_name) args in
+      (* add all new choices to remaining args *)
+      List.fold_left (fun new_neighbors new_choice ->
+        (file, ((arg_name,new_choice)::remaining_args))::new_neighbors
+      ) nebs (ChowArgs.expand_choices valid_choices)
+    ) [] Config.adaptable_args
+    
+end
+
 
 (* -------------------------- FOR TESTING ------------------------*)
 let my_passes = ["a"; "b"; "c"; "d"; "e"; "f"; "g"]
@@ -846,5 +962,23 @@ let apply state times fits =
     let state'' = SF.apply_results state' (file, args, fit) in
     state'',state''::states
   ) (state, []) times
+
+
+module CSS = ChowSearchSpace(ChowChoices)
+let rp1 = CSS.random_point ("",[])
+let nebs = CSS.all_neighbors rp1
+
+let anyeq lst =
+  let args_eq (_,x) (_,y) = (ChowArgs.sorted_order x) = (ChowArgs.sorted_order y) in
+  List.fold_left (fun (search,found) x ->  
+    if search = [] then ([], found) else
+    (List.tl search, (List.exists (args_eq x) search || found))
+  ) (List.tl lst, false) lst
+
+
+module SFC = SingleFileSearch(CSS)
+let cs = SFC.make_state rp1 Cache.no_cache ~patience:0.5 ~greedy:true;; 
+let cs' = SFC.get_next_eval cs
+
 
 
