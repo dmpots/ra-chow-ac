@@ -1,7 +1,7 @@
 #!/bin/env bash
 
 TWK_DIR=$HOME/research/tweaker
-PREP_DIR=./SCRATCH
+PREP_DIR=./TWEAK
 
 cat $* | ruby ${TWK_DIR}/tweaker.rb -d ${PREP_DIR} 
 
