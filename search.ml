@@ -223,6 +223,7 @@ sig
   val get_next_eval : t -> search_state -> fitness_input * search_state
   val apply_results : t -> search_state -> fitness_output -> search_state
   val fitness : t -> fitness_input -> fitness_output
+  val checkpoint : t -> search_state -> int -> unit
 end
 
 module type SEARCHSPACE = 
@@ -447,9 +448,43 @@ end
  *---------------------------------------------------------------*)
 module SearchDriver (S : SEARCH) = 
 struct
-  let search ?log:(logfile=stdout) (hood : S.t) (seed : S.elem) limit =
+  (* types for describing when to save checkpoints of the search *)
+  type time_desc = Sec of int | Min of int | Hour of int
+  type check_time = Eval of int | Time of time_desc
+  type check_points = {
+    checktime : check_time;
+    mutable last_save : float;
+  }
+ 
+  (* return the time in seconds (float) for the time_desc *)
+  let time_in_secs = function
+    | Sec s -> float_of_int s
+    | Min m -> float_of_int (m * 60)
+    | Hour h -> float_of_int (h * 60 * 60)
+
+  (* report whether or not we need a checkpoint *)
+  let need_checkpoint check_points evals =
+    match check_points.checktime with 
+      | Eval nevals -> (evals mod nevals) = 0 && evals > 0
+      | Time t -> begin
+        let wait_time = time_in_secs t in
+        let now = Unix.time () in
+        check_points.last_save +. wait_time <= now
+      end
+
+  (* save a checkpoint of the search if needed *)
+  let save_checkpoint hood search_state check_points evals =
+    if need_checkpoint check_points evals then begin
+      S.checkpoint hood search_state evals;
+      check_points.last_save <- Unix.time ();
+    end
+
+  (* run the search until +limit+ fitness evaluations are reached *)
+  let search ?check:(checktime=Eval(15))(hood : S.t) (seed : S.elem) limit =
+    let check_points = {checktime = checktime; last_save = Unix.time ();} in
     let rec do_search evals search_state =
       if evals >= limit then (S.best_value hood search_state) else
+      let _ = save_checkpoint hood search_state check_points evals in
       let next_eval,new_state = S.get_next_eval hood search_state in
       let fit_results = S.fitness hood next_eval in
       let new_state' = S.apply_results hood new_state fit_results in
@@ -919,8 +954,17 @@ struct
   let all_neighbors ((file,args) : elem) : elem list =
     let same_name name (n,_) = name = n in
     let diff_name name (n,_) = name <> n in
+    let get_current_choice arg_name arg_choices =
+      try
+        let (_,current_choice) = List.find (same_name arg_name) args in
+        current_choice
+      with Not_found -> (*assert that the param is a bool param *)
+        assert (match arg_choices with | BoolC _ -> true | _ -> false);
+        Bool false
+    in
+        
     List.fold_left (fun nebs (arg_name, arg_choices) ->
-      let (_,current_choice) = List.find (same_name arg_name) args in
+      let current_choice = get_current_choice arg_name arg_choices in
       let valid_choices = ChowArgs.remove_choice current_choice arg_choices in
       let remaining_args = List.filter (diff_name arg_name) args in
       (* add all new choices to remaining args *)
@@ -971,6 +1015,7 @@ struct
     pat : float;
     cash : cache;
     greed : bool;
+    logger : out_channel option;
   }
   type elem = SFS.elem list
   type search_state   = SFS.search_state list
@@ -979,10 +1024,11 @@ struct
 
   (* create : float -> cache -> greedy:bool -> t 
    * creates new search with given params *)
-  let create patience cache ~greedy:greedy = { 
+  let create patience ?logger:(log=None) ~greedy:greedy cache = { 
     pat = patience;
     cash = cache;
     greed = greedy;
+    logger = log;
   }
 
   (* make_state : t -> elem -> search_state
@@ -1030,9 +1076,24 @@ struct
   let fitness _ fitness_input = 
     ExternalFitness.single_fitness fitness_input
 
+  (* throw_dart : string list -> elem *)
   let throw_dart files  =  
     let elems = List.map (fun f -> SFS.from_fitness_input (f,"")) files in
     List.map (fun elem -> SFS.random_point elem) elems
+
+  (* checkpoint: t -> search_state -> int -> elem *)
+  let checkpoint config search_state num_evals = 
+    match config.logger with
+      | None -> ()
+      | Some out ->
+        let ts = Util.timestamp () in
+        Printf.fprintf out "*** CHECKPOINT: %s ***\n" ts;
+        List.iter (fun state ->
+          let best,fit = state.best in
+          let file,args = SFS.to_fitness_input best in
+          Printf.fprintf out "%s|%s|%.0f|%d\n" file args fit state.restarts
+        ) search_state;
+        flush out
 end
 
 
@@ -1081,6 +1142,6 @@ let cs' = SFC.get_next_eval cs
 module BS = BenchmarkSearch(SFC)
 module CSD = SearchDriver(BS)
 let seed = BS.throw_dart ["fmin.i"]
-let bs = BS.create 0.5 Cache.no_cache ~greedy:true
+let bs = BS.create 0.5 Cache.no_cache ~greedy:true ~logger:(Some stdout)
 
 
