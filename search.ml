@@ -417,12 +417,17 @@ struct
       | None -> ()
       | Some out ->
         let ts = Util.timestamp () in
-        Printf.fprintf out "*** CHECKPOINT (%d evals): %s ***\n" evals ts;
-        List.iter (fun state ->
+        let sorter = (fun (_,f1,_,_) (_,f2,_,_) -> compare f2 f1) in
+        let bests = List.map (fun state ->
           let best,fit = state.best in
           let file,args = SFS.to_fitness_input best in
-          Printf.fprintf out "%s|%.0f|%s|%d\n" file fit args state.restarts
-        ) search_state;
+          (file, fit, args, state.restarts)
+        ) search_state
+        in 
+        Printf.fprintf out "*** CHECKPOINT (%d evals): %s ***\n" evals ts;
+        List.iter (fun (file,fit,args,restarts) ->
+          Printf.fprintf out "%s|%.0f|%s|%d\n" file fit args restarts
+        ) (List.sort sorter bests);
         flush out
 end
 

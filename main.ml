@@ -51,6 +51,9 @@ let parse_args () =
     Arg.usage args usage;
     exit 2
 
+(* sort function used to sort results *)
+let sorter = (fun (_,_,f1) (_,_,f2) -> compare f2 f1) 
+
 (* build a search function from the options given. the search function
  * should take in a list of files included in the search and print the
  * results of the search *)
@@ -77,7 +80,7 @@ let build_search lim seed out_file cache logger patience greedy check =
     let results = Driver.search search seed lim ~check:checkpoint in
     List.iter (fun (file,args,fit) ->
       Printf.fprintf outchan "%s|%.0f|%s\n" file fit args
-    ) results;
+    ) (List.sort sorter results);
     Printf.fprintf logger "*** finished search at: %s\n" (Util.timestamp ());
   )
 
