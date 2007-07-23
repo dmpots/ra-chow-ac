@@ -1,12 +1,5 @@
 open Cache
 
-type ('a, 'b) fitness_bundle = {
-  fitness : 'a -> 'b;
-  best_fitness : 'a list -> 'a * 'b;
-  summarize : 'b -> float;
-}
-
-
 (*================================================================
  * EXTERNAL FITNESS
  *===============================================================
@@ -98,117 +91,9 @@ struct
 end
 
 (*================================================================
- * FUNCTION SPECIFIC FITNESS
- *===============================================================
- * Computes fitness for neighborhoods that specify specific args per
- * fuction.
- *)
-module FunctionSpecificFitness = 
-struct
-  let puts s = print_string s; print_newline ()
-
-  let separate cache (massaged : ExternalFitness.input) =
-    List.fold_left (fun (repeats, news) (file,args) ->
-      match (cache.find file args) with
-        | None -> (repeats, (file,args)::news)
-        | Some fitness -> ((file,args,fitness)::repeats, news)
-    ) ([],[]) massaged
-
-  let update_cache cache (updates : ExternalFitness.output) =
-    List.map (fun (file,args,fit) -> cache.add file args fit) updates
-
- (*---------------------------fun---------------------------------*) 
-  let fitness cache massage resident = 
-    let massaged = massage resident in
-    let previous,need_fit = separate cache massaged in
-    let each_fun_marked = ExternalFitness.single_fitness need_fit in 
-    let _ = update_cache cache each_fun_marked in
-    List.fold_left (fun (fits, sum) (file,pass,fit) -> 
-      (file,pass,fit)::fits, sum +. fit
-    ) ([], 0.0) (previous@each_fun_marked)
-
-  (*---------------------------fun---------------------------------*) 
-  (* find the fitness of each (function,pass) pair and choose the result
-     to be a combination of the highest individual function pairs *)
-  let best_fitness cache massage unmassage residents =
-    let better_than challenger champ = challenger < champ in
-    (* make sure the residents are in a form suitable for use with the
-       External fitness module *)
-    let massaged = List.map massage residents in
-    let previous,need_fit = 
-      List.split (List.map (separate cache) massaged) in
-    (* mass together all previously computed fitness values *)
-    let previous = List.fold_left (fun a b -> a@b) [] previous in
-    (* get a long list containing (function,args,fitness) for every
-       function and args that exists in the original residents entries *)
-    let each_fun_marked = 
-      List.flatten (ExternalFitness.bulk_fitness need_fit) in
-    let _ = update_cache cache each_fun_marked in
-    (* collect results into map of function --> (pass,bestfitness) *)
-    let module M = Map.Make(String) in
-    let best_map = 
-    List.fold_left (fun map (file, pass, fit) -> 
-      try
-        let (_,bestfit) = M.find file map in
-        if better_than fit bestfit then 
-          M.add file (pass,fit) (M.remove file map) 
-        else map
-      with Not_found -> 
-        M.add file (pass, fit) map
-    ) (M.empty) (previous@each_fun_marked)
-    in
-    (* convert the map into resident * fitness pair *)
-    let best_res,fits,fit = 
-      M.fold (fun file (pass, fit) (res, fits, sum) ->
-        ((file, pass)::res, (file,pass,fit)::fits, fit +. sum)
-      ) best_map ([], [], 0.0)
-    in
-    (unmassage best_res, (fits,fit))
-
-  (*---------------------------fun---------------------------------*) 
-  (* probably change this to pass in the external fitness function to
-     use and curry the fitness functions to take that as the first
-     param *)
-  let make ?cache:(cache=NoCache.make_cache("")) 
-    massage unmassage = 
-  {
-    fitness=fitness cache massage; 
-    best_fitness=best_fitness cache massage unmassage;
-    summarize = (fun (_, sum) -> sum)
-  }
-end
-
-(*================================================================
- * RANDOM LIST
- *===============================================================
- * Module for functions that act randomly in some way on lists
- *---------------------------------------------------------------*)
-module RandomList = 
-struct
-  let swap a i j =
-    let t = a.(i) in 
-      a.(i) <- a.(j); a.(j) <- t
-
-  (* chooses n values randomly from the passed list *)
-  let pick n from_list =
-    let a = Array.of_list from_list in
-    let size = Array.length a in
-    if n > size then raise (Invalid_argument "pick: n > size") else
-    let rec loop i ub picks =
-      if i = n then picks else
-      let _ = swap a (if ub = 0 then 0 else Random.int ub) ub in
-      loop (i+1) (ub-1) (a.(ub)::picks)
-    in
-    loop 0 (size-1) []
-
-  let random_choice lst = 
-    List.nth lst (Random.int (List.length lst)) 
-end
-
-(*================================================================
- * NEIGHBORHOOD
+ * SEARCH INTERFACE
  *================================================================
- * General neighborhood structure
+ * These modules define the interface used for running searching
  *---------------------------------------------------------------*)
 module type SEARCH =
 sig
@@ -276,7 +161,7 @@ struct
   (* choose random neighbors of the element. number based on patience *)
   let choose_random_neighbors elem patience =
     let all = all_neighbors elem in
-    RandomList.pick (num_nebs_to_explore all patience) all
+    Util.RandomList.pick (num_nebs_to_explore all patience) all
 
   (* query the cache to see if the element is present *)
   let lookup_fitness cache elem =
@@ -441,10 +326,115 @@ struct
               record_neighbor_fitness elem fitness state
 end
 
+(*
+ *==============================================================
+ * BENCHMARK SEARCH
+ *===============================================================
+ * Module that lifts the search from single files to entire
+ * benchmarks. The search is paramertized by the search space over
+ * which the search is performed. A single file search module is used
+ * to search over each individual file in independent searches. This
+ * module just exists to tie all the searches together into one
+ * convienient interface.
+ *---------------------------------------------------------------
+ *)
+module BenchmarkSearch (SS : SEARCHSPACE) =
+struct
+  module SFS = SingleFileSearch(SS)
+  type t = {
+    pat : float;
+    cash : cache;
+    greed : bool;
+    logger : out_channel option;
+  }
+  type elem = SFS.elem list
+  type search_state   = SFS.search_state list
+  type fitness_input  = ExternalFitness.input
+  type fitness_output = ExternalFitness.output
+
+  (* create : float -> cache -> greedy:bool -> t 
+   * creates new search with given params *)
+  let create patience ?logger:(log=None) ~greedy:greedy cache = { 
+    pat = patience;
+    cash = cache;
+    greed = greedy;
+    logger = log;
+  }
+
+  (* make_state : t -> elem -> search_state
+   * the state is just an ordered collection of individual file 
+   * searches. it is important that the searches remain sorted as this
+   * order is used to apply results since we do not have a guarantee
+   * that the external fitness will return results in the same order
+   * that we give them.
+   *)
+  let make_state config seeds = 
+    let states = 
+      List.map (fun seed -> 
+        SFS.make_state 
+          seed config.cash ~patience:config.pat ~greedy:config.greed
+      ) seeds
+    in
+    List.sort (fun s1 s2 -> compare s1.file s2.file) states
+
+  (* best_value : t -> search_state -> fitness_output *)
+  let best_value _ searches = 
+    List.map (fun s -> 
+      let best,fit = s.best in 
+      let file,args = SFS.to_fitness_input best  in
+      (file,args,fit)
+    ) searches 
+
+  (* get_next_eval : t -> search_state -> fitness_input * search_state *)
+  let get_next_eval _ searches = 
+    List.split (List.map (fun s -> SFS.get_next_eval s) searches)
+
+  (* apply_results : t -> search_state -> fitness_output -> search_state 
+   * the results are sorted to be in the same order as the list of
+   * individual file searches we are conducting. this means that the
+   * searches list must remain sorted.
+   *) 
+  let apply_results _ searches fitness_output =
+    let order_results = 
+      List.sort (fun (file1,_,_) (file2,_,_) -> compare file1 file2)
+    in
+    List.map2 (fun s fop -> 
+      SFS.apply_results s fop
+    ) searches (order_results fitness_output)
+
+  (* fitness : t -> fitness_input -> fitness_output *)
+  let fitness _ fitness_input = 
+    ExternalFitness.single_fitness fitness_input
+
+  (* throw_dart : string list -> elem *)
+  let throw_dart files  =  
+    let elems = List.map (fun f -> SFS.from_fitness_input (f,"")) files in
+    List.map (fun elem -> SFS.random_point elem) elems
+
+  (* checkpoint: t -> search_state -> int -> elem *)
+  let checkpoint config search_state evals = 
+    match config.logger with
+      | None -> ()
+      | Some out ->
+        let ts = Util.timestamp () in
+        Printf.fprintf out "*** CHECKPOINT (%d evals): %s ***\n" evals ts;
+        List.iter (fun state ->
+          let best,fit = state.best in
+          let file,args = SFS.to_fitness_input best in
+          Printf.fprintf out "%s|%.0f|%s|%d\n" file fit args state.restarts
+        ) search_state;
+        flush out
+end
+
+
+
 (*================================================================
  *  SEARCH DRIVER
  *===============================================================
- *
+ * This module is the driver for the actual search. It is paramertized
+ * by a search module that is used to do the actual searching. This
+ * module takes care of running the search until the limit is reached
+ * and performing checkpoint operations at appropriate times.
  *---------------------------------------------------------------*)
 module SearchDriver (S : SEARCH) = 
 struct
@@ -455,6 +445,21 @@ struct
     checktime : check_time;
     mutable last_save : float;
   }
+
+  (* returns a check_time from the given string. the format is an
+   * integer followed by either e,s,m,h to denote the type. i.e
+   * 10m = 10 minutes
+   * 10e = 10 evals *)
+  let parse_check str = 
+    let len  = String.length str  in
+    let ival = int_of_string (String.sub str 0 (len - 1)) in
+    match String.get str (len - 1) with
+      | 'e' -> Eval ival
+      | 's' -> Time (Sec ival)
+      | 'm' -> Time (Min ival)
+      | 'h' -> Time (Hour ival)
+      | _ -> failwith "checkval must end with e,s,m or h"
+
  
   (* return the time in seconds (float) for the time_desc *)
   let time_in_secs = function
@@ -492,31 +497,6 @@ struct
     in
     do_search 0 (S.make_state hood seed)
 end
-
-(*================================================================
- * LOGGER
- *================================================================
- * Logging module
- *---------------------------------------------------------------*)
-module Logger =
-struct
-  type t = out_channel
-
-  let date_stamp () =
-    let tm = Unix.localtime (Unix.time ()) in
-    Printf.sprintf "[%d/%02d/%02d %02d:%02d:%02d] "
-        (tm.Unix.tm_year+1900) (tm.Unix.tm_mon+1) tm.Unix.tm_mday
-            tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
-
-  let logger chan  msg = 
-    output_string chan "L,";
-    output_string chan (date_stamp ());
-    output_string chan msg; 
-    output_string chan "\n"; 
-    flush chan
-
-end
-
 
 (*================================================================
  * CHOW ARGS
@@ -624,8 +604,6 @@ struct
       | FloatC  floats -> List.map (fun f -> Float f) floats
       | TupleC tups -> List.map (fun t -> Tuple t) tups
    
-(*  let change_random_arg (arg : chow_arg) =*)
-    
  (*  removes the choice from choices corresponding to the current
      value of arg_val *)
  let remove_choice arg_val choices = 
@@ -647,132 +625,6 @@ struct
       | Float f  -> FloatC (filter_float_list f choices)
       | Tuple t  -> TupleC (filter_tuple_list t choices)
 
-end
-
-
-(*--------------------------------------------------------------
-  - CHOW HOOD
-  --------------------------------------------------------------
-  - Chow specific neighborhood functions
-  --------------------------------------------------------------*)
-module ChowHood =
-struct
-  open ChowArgs
-  type file = string
-  type resident = (file * (chow_arg list)) list
-  type fit_result = ((file * string * float) list * float)
-  type t = {
-    fixed_args : chow_arg list;
-    adaptable_args : ChowArgs.spec list;
-    fb : (resident,fit_result) fitness_bundle;
-  }
-  type description = (chow_arg list * ChowArgs.spec list * cache)
-
- 
-  (* could use buf for more efficency here *)
-  let join lst sep to_s = 
-      List.fold_left ( fun acc mem -> 
-        acc ^ sep ^ (to_s mem)
-      ) (to_s (List.hd lst)) (List.tl lst)
-   
-  (* convet the resident to a format usable with external fitness *)
-  let to_extern (resident : resident) : ExternalFitness.input =
-    List.map (fun (file, args) -> 
-      (file, join (ChowArgs.sorted_order args) " " ChowArgs.to_string)
-    ) resident
-
-  (* convet the resident from format used by external fitness *)
-  let from_extern (extrn_rep :ExternalFitness.input) : resident =
-    List.map (fun (file, args) ->
-      (file, ChowArgs.from_string args)
-    ) extrn_rep
-
-
-  (* some utility functions *)
-  let same_name name ((n,_) : chow_arg) = name = n
-  let diff_name name ((n,_) : chow_arg) = name <> n
-  let random_choice lst = List.nth lst (Random.int (List.length lst)) 
-
-  (* choose randomly among the valid choices for an arg *)
-  let take_random_choice (choices : arg_choices) : arg_val =
-    match choices with
-    | BoolC  lst -> Bool  (random_choice lst)
-    | IntC   lst -> Int   (random_choice lst)
-    | FloatC lst -> Float (random_choice lst)
-    | TupleC lst -> Tuple (random_choice lst)
-
-  (* change one arg in the arglist *)
-  let change_random_arg hood (arglist : chow_arg list) = 
-    (* some utility funs *)
-    let filter_int_list n = function
-      | IntC cs -> List.filter (fun n' -> n <> n') cs
-      | _ -> failwith "oops should be int"
-    in
-    let filter_tuple_list tup = function
-      | TupleC cs -> List.filter (fun tup' -> tup <> tup') cs
-      | _ -> failwith "oops should be tuple"
-    in
-    let filter_float_list f = function
-      | FloatC cs -> List.filter (fun f' -> f <> f') cs
-      | _ -> failwith "oops should be float"
-    in
-    (* choose an arg to change *)
-    let (name,choices) = random_choice hood.adaptable_args in
-    let chosen_arg = same_name name in
-    (* see if there is a previous value for this arg *)
-    let old_choice = 
-      if List.exists chosen_arg arglist then 
-        Some (snd (List.find chosen_arg arglist))
-      else
-        None
-    in
-    let new_choice = 
-    match old_choice with
-      | None -> take_random_choice choices
-      | Some(arg) ->(
-        match arg with
-          | Bool b -> Bool (not b)
-          | Int  n -> Int (random_choice (filter_int_list n choices))
-          | Float f -> Float (random_choice (filter_float_list f choices))
-          | Tuple t -> Tuple (random_choice (filter_tuple_list t choices))
-        )
-    in (name, new_choice)::(List.filter (diff_name name) arglist)
-
-  (* a group of random neighbors (possibly with repeats) *)
-   let neighbors hood (resident : resident) count = 
-    let len = Array.to_list (Array.make count resident) in
-    List.map (fun file_args ->
-      List.map (fun (file, arglist) ->
-        file, (change_random_arg hood arglist)
-      ) file_args
-    ) len
-
-  (* one random neighbor *)
-  let random_neighbor hood (resident: resident) : resident = 
-    List.map (fun (file, arglist) ->
-        file, (change_random_arg hood arglist)
-    ) resident
-    
-  (* fitness *)
-  let fitness (hood : t) = hood.fb
-
-  let random_resident hood files : resident = 
-    List.map (fun file ->
-      let adaptables = 
-        List.map (fun (name, choices) -> 
-          (name, take_random_choice choices)
-        ) hood.adaptable_args
-      in
-      (file, hood.fixed_args @ adaptables)
-    ) files
-    
-  (* create *)
-  let create (fixed, adaptable, cache) = {
-    fixed_args = fixed;
-    adaptable_args  = adaptable;
-    fb = FunctionSpecificFitness.make ~cache:cache to_extern from_extern
-  }
- 
 end
 
 
@@ -817,54 +669,6 @@ struct
   ]
 end
 
-(*---------------------- SAVING SOLUTIONS ------------------------
-  - 
-  ----------------------------------------------------------------*)
-(* module for saving solutions for some definition of saving *)
-module ChowSolution =
-(
-struct
-  type save_type = (ChowHood.resident * ChowHood.fit_result)
-  let timestamp () = 
-    let tm = Unix.localtime (Unix.time ()) in
-    Printf.sprintf "%02d:%02d:%02d  %02d/%02d/%d" 
-      tm.Unix.tm_hour tm.Unix.tm_min tm.Unix.tm_sec
-      (tm.Unix.tm_mon+1) tm.Unix.tm_mday (tm.Unix.tm_year+1900)
-
-  let file out_file (resident, (fits,sum)) = 
-      (*let ts = timestamp () in
-        Printf.printf "--- %s ---\n" ts;*)
-      let sorter = (fun (_,_,f1) (_,_,f2) -> compare f2 f1) in
-      List.iter (fun (file,args,count) ->
-        Printf.fprintf out_file "%s|%.0f|%s\n" file count args;
-      ) (List.sort sorter fits);
-      Printf.fprintf out_file "%%\n";
-     flush out_file
-  let std = file stdout 
-end
-:
-sig
-  type save_type = (ChowHood.resident * ChowHood.fit_result)
-  val std  : save_type -> unit
-  val file : out_channel -> save_type -> unit
-  val timestamp : unit -> string
-end
-)
-
-(*---------------------- SEARCH INTERFACE ------------------------
-  - 
-  ----------------------------------------------------------------*)
-(* perform the search *limit* times on problems of size *size* *)
-let iter_search ~limit search seed save next =
-  let rec do_search n start =
-    if n <= 0 then start else
-      let (solution,evals) = search start n in
-      let _ = save solution in
-      let seed' = next solution in do_search (n-evals) seed'
-  in
-  do_search limit seed
-
-
 (* ---------------------- SEARCH SPACES ----------------------*)
 (*===============================================================
  * PASS SEARCH SPACE
@@ -894,7 +698,7 @@ struct
   let to_fitness_input elem = elem
   let from_fitness_input elem = elem
   let random_point (file,arg) = 
-    (file, List.hd(RandomList.pick 1 Config.passes))
+    (file, List.hd(Util.RandomList.pick 1 Config.passes))
   let all_neighbors (file,_) = 
     List.map (fun a -> (file,a)) Config.passes 
 end
@@ -933,10 +737,10 @@ struct
   (* choose randomly among the valid choices for an arg *)
   let take_random_choice (choices : arg_choices) : arg_val =
     match choices with
-      | BoolC  lst -> Bool  (RandomList.random_choice lst)
-      | IntC   lst -> Int   (RandomList.random_choice lst)
-      | FloatC lst -> Float (RandomList.random_choice lst)
-      | TupleC lst -> Tuple (RandomList.random_choice lst)
+      | BoolC  lst -> Bool  (Util.RandomList.random_choice lst)
+      | IntC   lst -> Int   (Util.RandomList.random_choice lst)
+      | FloatC lst -> Float (Util.RandomList.random_choice lst)
+      | TupleC lst -> Tuple (Util.RandomList.random_choice lst)
 
   (* return a random point in the search space *)
   let random_point (file,_) =
@@ -975,129 +779,13 @@ struct
     
 end
 
-
-(*--------------------------- HOODS ------------------------------
-  -  DELETE THIS
-  ----------------------------------------------------------------*)
-module HCC=
-struct
-  let search ~log:logger nhood blah d = 
-    ((["",[]], ([],0.0)), 0)
-end
-
-
-(* HERE:
- * problem with searches raising Not_Found exception. check out why
- * this is so. Try this to see the error
- * ocaml> CSD.search bs seed 10
-*)
-
-(*
-module type SEARCH =
-sig
-  type t 
-  type elem
-  type search_state
-  type fitness_input  = ExternalFitness.input
-  type fitness_output = ExternalFitness.output
-
-  val make_state : t -> elem -> search_state
-  val best_value : t -> search_state -> fitness_output
-  val get_next_eval : t -> search_state -> fitness_input * search_state
-  val apply_results : t -> search_state -> fitness_output -> search_state
-  val fitness : t -> fitness_input -> fitness_output
-end
-*)
-module BenchmarkSearch (SS : SEARCHSPACE) =
-struct
-  module SFS = SingleFileSearch(SS)
-  type t = {
-    pat : float;
-    cash : cache;
-    greed : bool;
-    logger : out_channel option;
-  }
-  type elem = SFS.elem list
-  type search_state   = SFS.search_state list
-  type fitness_input  = ExternalFitness.input
-  type fitness_output = ExternalFitness.output
-
-  (* create : float -> cache -> greedy:bool -> t 
-   * creates new search with given params *)
-  let create patience ?logger:(log=None) ~greedy:greedy cache = { 
-    pat = patience;
-    cash = cache;
-    greed = greedy;
-    logger = log;
-  }
-
-  (* make_state : t -> elem -> search_state
-   * the state is just an ordered collection of individual file 
-   * searches. it is important that the searches remain sorted as this
-   * order is used to apply results since we do not have a guarantee
-   * that the external fitness will return results in the same order
-   * that we give them.
-   *)
-  let make_state config seeds = 
-    let states = 
-      List.map (fun seed -> 
-        SFS.make_state 
-          seed config.cash ~patience:config.pat ~greedy:config.greed
-      ) seeds
-    in
-    List.sort (fun s1 s2 -> compare s1.file s2.file) states
-
-  (* best_value : t -> search_state -> fitness_output *)
-  let best_value _ searches = 
-    List.map (fun s -> 
-      let best,fit = s.best in 
-      let file,args = SFS.to_fitness_input best  in
-      (file,args,fit)
-    ) searches 
-
-  (* get_next_eval : t -> search_state -> fitness_input * search_state *)
-  let get_next_eval _ searches = 
-    List.split (List.map (fun s -> SFS.get_next_eval s) searches)
-
-  (* apply_results : t -> search_state -> fitness_output -> search_state 
-   * the results are sorted to be in the same order as the list of
-   * individual file searches we are conducting. this means that the
-   * searches list must remain sorted.
-   *) 
-  let apply_results _ searches fitness_output =
-    let order_results = 
-      List.sort (fun (file1,_,_) (file2,_,_) -> compare file1 file2)
-    in
-    List.map2 (fun s fop -> 
-      SFS.apply_results s fop
-    ) searches (order_results fitness_output)
-
-  (* fitness : t -> fitness_input -> fitness_output *)
-  let fitness _ fitness_input = 
-    ExternalFitness.single_fitness fitness_input
-
-  (* throw_dart : string list -> elem *)
-  let throw_dart files  =  
-    let elems = List.map (fun f -> SFS.from_fitness_input (f,"")) files in
-    List.map (fun elem -> SFS.random_point elem) elems
-
-  (* checkpoint: t -> search_state -> int -> elem *)
-  let checkpoint config search_state num_evals = 
-    match config.logger with
-      | None -> ()
-      | Some out ->
-        let ts = Util.timestamp () in
-        Printf.fprintf out "*** CHECKPOINT: %s ***\n" ts;
-        List.iter (fun state ->
-          let best,fit = state.best in
-          let file,args = SFS.to_fitness_input best in
-          Printf.fprintf out "%s|%s|%.0f|%d\n" file args fit state.restarts
-        ) search_state;
-        flush out
-end
-
+(* -------------------------- FOR MAIN ------------------------*)
+module CSS = ChowSearchSpace(ChowChoices)
+module BenchSearch = BenchmarkSearch(CSS)
+module Driver = SearchDriver(BenchSearch)
 
 (* -------------------------- FOR TESTING ------------------------*)
+(*
 let my_passes = ["a"; "b"; "c"; "d"; "e"; "f"; "g"]
 let greedy = false
 module SF = 
@@ -1123,7 +811,6 @@ let apply state times fits =
   ) (state, []) times
 
 
-module CSS = ChowSearchSpace(ChowChoices)
 let rp1 = CSS.random_point ("",[])
 let nebs = CSS.all_neighbors rp1
 
@@ -1143,5 +830,5 @@ module BS = BenchmarkSearch(SFC)
 module CSD = SearchDriver(BS)
 let seed = BS.throw_dart ["fmin.i"]
 let bs = BS.create 0.5 Cache.no_cache ~greedy:true ~logger:(Some stdout)
-
+*)
 
