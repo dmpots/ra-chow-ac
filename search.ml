@@ -210,15 +210,15 @@ end
  *================================================================
  * General neighborhood structure
  *---------------------------------------------------------------*)
-module type NEIGHBORHOOD2d=
+module type SEARCH =
 sig
   type t 
-  type resident
+  type elem
   type search_state
   type fitness_input  = ExternalFitness.input
   type fitness_output = ExternalFitness.output
 
-  val make_state : t -> resident -> search_state
+  val make_state : t -> elem -> search_state
   val best_value : t -> search_state -> fitness_output
   val get_next_eval : t -> search_state -> fitness_input * search_state
   val apply_results : t -> search_state -> fitness_output -> search_state
@@ -253,6 +253,7 @@ type 'state file_search_state = {
   patience : float;
   greedy : bool;
   cache : Cache.cache;
+  file : string;
 }
 
 (* search module *)
@@ -292,6 +293,7 @@ struct
         patience = patience;
         greedy = greed;
         cache = cache;
+        file  = fst (to_fitness_input seed)
       }
     in 
     state
@@ -422,7 +424,10 @@ struct
     let (file,args,fitness) = fitness_output in
     let elem = from_fitness_input (file,args) in
       match state.fitness with 
-        | None -> assert (elem = state.current);
+        | None -> 
+            (* just for assert *)
+            let ju,jj = to_fitness_input state.current in
+            assert (ju = file && jj = args);
             { state with 
               fitness = Some(fitness);
               best = new_best state elem fitness; } 
@@ -440,17 +445,17 @@ end
  *===============================================================
  *
  *---------------------------------------------------------------*)
-module HillClimber2d (N : NEIGHBORHOOD2d) = 
+module SearchDriver (S : SEARCH) = 
 struct
-  let search ?log:(logfile=stdout) (hood : N.t) (seed : N.resident) limit =
+  let search ?log:(logfile=stdout) (hood : S.t) (seed : S.elem) limit =
     let rec do_search evals search_state =
-      if evals >= limit then (N.best_value hood search_state) else
-      let next_eval,new_state = N.get_next_eval hood search_state in
-      let fit_results = N.fitness hood next_eval in
-      let new_state' = N.apply_results hood new_state fit_results in
+      if evals >= limit then (S.best_value hood search_state) else
+      let next_eval,new_state = S.get_next_eval hood search_state in
+      let fit_results = S.fitness hood next_eval in
+      let new_state' = S.apply_results hood new_state fit_results in
       do_search (evals+1) new_state'
     in
-    do_search 0 (N.make_state hood seed)
+    do_search 0 (S.make_state hood seed)
 end
 
 (*================================================================
@@ -937,6 +942,100 @@ struct
 end
 
 
+(* HERE:
+ * problem with searches raising Not_Found exception. check out why
+ * this is so. Try this to see the error
+ * ocaml> CSD.search bs seed 10
+*)
+
+(*
+module type SEARCH =
+sig
+  type t 
+  type elem
+  type search_state
+  type fitness_input  = ExternalFitness.input
+  type fitness_output = ExternalFitness.output
+
+  val make_state : t -> elem -> search_state
+  val best_value : t -> search_state -> fitness_output
+  val get_next_eval : t -> search_state -> fitness_input * search_state
+  val apply_results : t -> search_state -> fitness_output -> search_state
+  val fitness : t -> fitness_input -> fitness_output
+end
+*)
+module BenchmarkSearch (SS : SEARCHSPACE) =
+struct
+  module SFS = SingleFileSearch(SS)
+  type t = {
+    pat : float;
+    cash : cache;
+    greed : bool;
+  }
+  type elem = SFS.elem list
+  type search_state   = SFS.search_state list
+  type fitness_input  = ExternalFitness.input
+  type fitness_output = ExternalFitness.output
+
+  (* create : float -> cache -> greedy:bool -> t 
+   * creates new search with given params *)
+  let create patience cache ~greedy:greedy = { 
+    pat = patience;
+    cash = cache;
+    greed = greedy;
+  }
+
+  (* make_state : t -> elem -> search_state
+   * the state is just an ordered collection of individual file 
+   * searches. it is important that the searches remain sorted as this
+   * order is used to apply results since we do not have a guarantee
+   * that the external fitness will return results in the same order
+   * that we give them.
+   *)
+  let make_state config seeds = 
+    let states = 
+      List.map (fun seed -> 
+        SFS.make_state 
+          seed config.cash ~patience:config.pat ~greedy:config.greed
+      ) seeds
+    in
+    List.sort (fun s1 s2 -> compare s1.file s2.file) states
+
+  (* best_value : t -> search_state -> fitness_output *)
+  let best_value _ searches = 
+    List.map (fun s -> 
+      let best,fit = s.best in 
+      let file,args = SFS.to_fitness_input best  in
+      (file,args,fit)
+    ) searches 
+
+  (* get_next_eval : t -> search_state -> fitness_input * search_state *)
+  let get_next_eval _ searches = 
+    List.split (List.map (fun s -> SFS.get_next_eval s) searches)
+
+  (* apply_results : t -> search_state -> fitness_output -> search_state 
+   * the results are sorted to be in the same order as the list of
+   * individual file searches we are conducting. this means that the
+   * searches list must remain sorted.
+   *) 
+  let apply_results _ searches fitness_output =
+    let order_results = 
+      List.sort (fun (file1,_,_) (file2,_,_) -> compare file1 file2)
+    in
+    List.map2 (fun s fop -> 
+      SFS.apply_results s fop
+    ) searches (order_results fitness_output)
+
+  (* fitness : t -> fitness_input -> fitness_output *)
+  let fitness _ fitness_input = 
+    ExternalFitness.single_fitness fitness_input
+
+  let throw_dart files  =  
+    let elems = List.map (fun f -> SFS.from_fitness_input (f,"")) files in
+    List.map (fun elem -> SFS.random_point elem) elems
+end
+
+
 (* -------------------------- FOR TESTING ------------------------*)
 let my_passes = ["a"; "b"; "c"; "d"; "e"; "f"; "g"]
 let greedy = false
@@ -978,5 +1077,10 @@ let anyeq lst =
 module SFC = SingleFileSearch(CSS)
 let cs = SFC.make_state rp1 Cache.no_cache ~patience:0.5 ~greedy:true;; 
 let cs' = SFC.get_next_eval cs
+
+module BS = BenchmarkSearch(SFC)
+module CSD = SearchDriver(BS)
+let seed = BS.throw_dart ["fmin.i"]
+let bs = BS.create 0.5 Cache.no_cache ~greedy:true
 
 
