@@ -1,5 +1,4 @@
 #!/bin/env ruby
-
 require 'yaml'
 
 def parse_body(body, &blk)
@@ -20,9 +19,11 @@ end
 
 if __FILE__ == $0 then
   #srand(99)
-  File.open("log.txt", "w") do |log|
+  File.open("log.txt", "a") do |log|
   parse_body(ARGF.read) do |specifics|
+    #specifics.keys.sort_by{rand}.each do |k|
     specifics.each do |k,v|
+      v = specifics[k]
       opcnt = rand 1000
       puts "#{k}|#{opcnt}|#{v}"
       log.puts "#{k}|#{opcnt}|#{v}"
