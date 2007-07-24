@@ -62,10 +62,10 @@ let tomcatv = ["tomcatv.i"]
 
 (* spec95X *)
 let applu = [
-  "exact.i"; "buts.i"; "error.i"; "ssor.i"; "maxnorm.i";
-  "applu.i"; "verify.i"; "l2norm.i"; "jacu.i"; "erhs.i"; "jacld.i";
+  "exact.i"; "buts.i"; "error.i"; "ssor.i";
+  "verify.i"; "l2norm.i"; "jacu.i"; "erhs.i"; "jacld.i";
   "setiv.i"; "rhs.i"; "pintgr.i"; "setbv.i"; "blts.i"
-]
+] (* excluded: applu.i, maxnorm.i *)
 
 let wave5X = [
   "injbatX.i"; "vslv1pX.i"; "ecrdX.i"; "bcndbX.i";
