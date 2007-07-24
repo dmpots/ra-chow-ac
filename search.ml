@@ -257,8 +257,8 @@ struct
       | Some neb -> begin
           let file,args = to_fitness_input neb in
           match state.cache.find file args  with
-            | None -> Some (file,args),state
-            | Some fit ->
+            | None -> Some (file,args),state (* cache miss *)
+            | Some fit -> (* cache hit *)
                 let curfit = get_current_fitness state in
                 let new_state = 
                   if fit < curfit && state.greedy then
@@ -309,9 +309,11 @@ struct
   let apply_results state (fitness_output : ExternalFitness.output_element) =
     let (file,args,fitness) = fitness_output in
     let elem = from_fitness_input (file,args) in
+    state.cache.add file args fitness; (* update cache *)
       match state.fitness with 
         | None -> 
-            (* just for assert *)
+            (* current state has unknown fitness. make sure that is
+             * the fitness we are applying (ju,jj just for assert) *)
             let ju,jj = to_fitness_input state.current in
             assert (ju = file && jj = args);
             { state with 

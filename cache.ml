@@ -65,7 +65,8 @@ CREATE TABLE cache (
   hits      INTEGER DEFAULT 0
 );
 
-CREATE INDEX cache_args_index ON cache(args);
+CREATE UNIQUE INDEX cache_id_index ON cache(id);
+CREATE INDEX cache_filename_args_index ON cache(filename,args);
 "
   (* helpers *)
   let atoi = int_of_string
@@ -90,7 +91,7 @@ CREATE INDEX cache_args_index ON cache(args);
       | Some(fit) -> 
         (* update hits column *)
         let sql = Printf.sprintf "
-          UPDATE cache set hits = %d where id = %d
+          UPDATE cache SET hits = %d WHERE id = %d
         " (hits+1) row_id
         in
         let _ = assert_ok (Sqlite3.exec db sql) () in fitness
