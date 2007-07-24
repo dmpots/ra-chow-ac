@@ -78,10 +78,10 @@ let build_search lim seed out_file cache logger patience greedy check =
       BenchSearch.create patience cache ~greedy:greedy ~logger:(Some logger)
     in
     let results = Driver.search search seed lim ~check:checkpoint in
+    Printf.fprintf logger "*** finished search at: %s\n" (Util.timestamp ());
     List.iter (fun (file,args,fit) ->
       Printf.fprintf outchan "%s|%.0f|%s\n" file fit args
     ) (List.sort sorter results);
-    Printf.fprintf logger "*** finished search at: %s\n" (Util.timestamp ());
   )
 
 
