@@ -13,6 +13,7 @@ let logger = ref stdout
 let patience = ref 0.2
 let greedy   = ref false
 let check    = ref "15m"
+let num_reg  = ref 32
 
 (* functions for setting values from command line *)
 let set_bench bench =
@@ -30,19 +31,28 @@ let not_set file_ref = !file_ref = sentinal
 let check_args () =  ()
 let parse_args () =
   let args = 
-    [("-limit", Arg.Set_int limit, "max number of fitness evaluations");
-     ("-out", Arg.Set_string out_file, "output file");
-     ("-db", Arg.String set_db , "database file");
-     ("-log", Arg.String set_log , "set log file  (defaults to stdout)");
-     ("-patience", Arg.Set_float patience, "patience (defaults to 0.20)");
-     ("-greedy", Arg.Set greedy, "set greedy (defaults to false)");
-     ("-check", Arg.Set_string check , "checkpoint interval (default 15m)");
-     ("-seed", Arg.Set_int seed_val , "random number generator seed");
+    [
+     ("-greedy", Arg.Set greedy, 
+       "make search greedy greedy (defaults to false)");
+     ("-patience", Arg.Set_float patience, 
+       "[PATIENCE] set patience (defaults to 0.20)");
+     ("-out", Arg.Set_string out_file, "[OUTFILE] set output file");
+     ("-db", Arg.String set_db , "[DBFILE] set database file");
+     ("-log", Arg.String set_log , 
+       "[LOGFILE] set log file  (defaults to stdout)");
+     ("-check", Arg.Set_string check , 
+       "[CHECKTIME] set checkpoint interval (default 15m)");
+     ("-limit", Arg.Set_int limit, 
+       "[EVALS] max number of fitness evaluations (default 10)");
+     ("-seed", Arg.Set_int seed_val , 
+       "[SEED] random number generator seed (default random)");
+     ("-reg", Arg.Set_int num_reg, 
+       "[K] set number of registers to use (default 32)");
      ("-run", Arg.Symbol (Benchmarks.valid_names, set_bench), 
-                                     "run search on this benchmark");
+       "[BENCHMARK] run search on this benchmark");
     ]
   in
-  let usage = "ac -run <benchmark> [-limit n] [-seed n] [-out file]" in
+  let usage = "ac -run <benchmark> [OPTIONS]" in
   Arg.parse args (fun _ -> ()) usage;
   try
     check_args ()
@@ -57,10 +67,19 @@ let sorter = (fun (_,_,f1) (_,_,f2) -> compare f2 f1)
 (* build a search function from the options given. the search function
  * should take in a list of files included in the search and print the
  * results of the search *)
-let build_search lim seed out_file cache logger patience greedy check =
-  let _ = if seed <> -1 then Random.init seed else Random.self_init () in
-  let outchan = if out_file = ""  then stdout else open_out out_file in
-  let checkpoint = Driver.parse_check check in begin
+let build_search lim seed out_file cache logger patience greedy check nregs =
+  (* create search modules *)
+  let module BenchSearch = BenchmarkSearch(ChowSearchSpace(
+    struct 
+      let adaptable_args = ChowChoices.adaptable_args
+      let fixed_args = [("r", ChowArgs.Int nregs)]
+    end
+  ))
+  in
+  let module Driver = SearchDriver(BenchSearch) in
+
+  (* print header *)
+  begin
     Printf.fprintf logger "*** BEGIN SEARCH CONFIGURATION ***\n";
     Printf.fprintf logger "* starttime: %s\n" (Util.timestamp ());
     Printf.fprintf logger "* patience: %0.2f\n" patience;
@@ -72,6 +91,13 @@ let build_search lim seed out_file cache logger patience greedy check =
     Printf.fprintf logger "*** END SEARCH CONFIGURATION ***\n";
     flush logger;
   end;
+
+  (* setup search params *)
+  let _ = if seed <> -1 then Random.init seed else Random.self_init () in
+  let outchan = if out_file = ""  then stdout else open_out out_file in
+  let checkpoint = Driver.parse_check check in 
+
+  (* search function *)
   (fun files -> 
     let seed     = BenchSearch.throw_dart files in
     let search   = 
@@ -90,7 +116,7 @@ let _ =
   parse_args ();
   let search = 
     build_search !limit !seed_val !out_file 
-                 !cache !logger !patience !greedy !check
+                 !cache !logger !patience !greedy !check !num_reg
   in
     List.iter (fun files -> search files;) !benchmarks 
 

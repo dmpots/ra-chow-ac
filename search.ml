@@ -674,6 +674,19 @@ struct
     ("o", ChowArgs.BoolC  [true; false]);
     ("a", ChowArgs.BoolC  [true; false]);
   ]
+
+  let r16 = [("r", ChowArgs.Int 16)]
+  let r32 = [("r", ChowArgs.Int 32)]
+  module R16 =
+  struct
+    let fixed_args = [("r", ChowArgs.Int 16)]
+    let adaptable_args = adaptable_args
+  end
+  module R32 =
+  struct
+    let fixed_args = [("r", ChowArgs.Int 32)]
+    let adaptable_args = adaptable_args
+  end
 end
 
 (* ---------------------- SEARCH SPACES ----------------------*)
@@ -787,9 +800,13 @@ struct
 end
 
 (* -------------------------- FOR MAIN ------------------------*)
-module CSS = ChowSearchSpace(ChowChoices)
-module BenchSearch = BenchmarkSearch(CSS)
+(*
+module CSS32 = ChowSearchSpace(ChowChoices.R32)
+module CSS16 = ChowSearchSpace(ChowChoices.R16)
+module BenchSearch = BenchmarkSearch(CSS32)
 module Driver = SearchDriver(BenchSearch)
+*)
+
 
 (* -------------------------- FOR TESTING ------------------------*)
 (*
