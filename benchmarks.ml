@@ -15,7 +15,7 @@ type benchmark =
 
 let valid_names = [
   "fmin"; "seval"; "rkf45"; "solve"; "svd"; "urand"; "zeroin";
-  "doduc"; "matrix300"; "tomcatv"; 
+  "doduc"; "matrix300"; "tomcatv"; "fpppp";
   "applu"; "wave5X"
 ]
 let from_name = function
@@ -54,9 +54,9 @@ let doduc = ["sortie.i"; "vgjyeh.i"; "colbur.i"; "dyeh.i";
 ]
 let fpppp = [
   "intowp.i"; "fpppp.i"; "gamgen.i"; "ilsw.i";
-  "twldrv.i"; "nprio.i"; "fmtgen.i"; "efill.i"; "aclear.i";
+  "twldrv.i"; "fmtgen.i"; "efill.i"; "aclear.i";
   "lclear.i"; "fmtset.i"
-]
+] (* excluded: "nprio.i"; *)
 let matrix300 = ["saxpy.i"; "sgemv.i"; "sgemm.i"]
 let tomcatv = ["tomcatv.i"]
 
