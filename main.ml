@@ -71,8 +71,11 @@ let build_search lim seed out_file cache logger patience greedy check nregs =
   (* create search modules *)
   let module BenchSearch = BenchmarkSearch(ChowSearchSpace(
     struct 
-      let adaptable_args = ChowChoices.adaptable_args
-      let fixed_args = [("r", ChowArgs.Int nregs)]
+      let adaptable_args = ChowChoices.adaptable_args_for_k nregs
+      let fixed_args = [
+        ("r", ChowArgs.Int nregs); 
+        ("f", ChowArgs.Bool true); 
+      ]
     end
   ))
   in

@@ -661,9 +661,9 @@ struct
   let fixed_args = [
     ("r", ChowArgs.Int 32)
   ]
-  let adaptable_args = [
+  let adaptable_args_for_k k =[
     ("b", ChowArgs.IntC [0;2;3;4;5;6;7;8;9;10;15]);
-    ("l", ChowArgs.TupleC (combine (upto 28 1) (upto 26 2)));
+    ("l", ChowArgs.TupleC (combine (upto (k-4) 1) (upto (k-6) 2)));
     ("m", ChowArgs.BoolC  [true; false]);
     ("e", ChowArgs.BoolC  [true; false]);
     ("z", ChowArgs.BoolC  [true; false]);
@@ -674,9 +674,8 @@ struct
     ("o", ChowArgs.BoolC  [true; false]);
     ("a", ChowArgs.BoolC  [true; false]);
   ]
+  let adaptable_args = adaptable_args_for_k 32
 
-  let r16 = [("r", ChowArgs.Int 16)]
-  let r32 = [("r", ChowArgs.Int 32)]
   module R16 =
   struct
     let fixed_args = [("r", ChowArgs.Int 16)]
