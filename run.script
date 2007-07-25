@@ -1,0 +1,40 @@
+#!/bin/env bash
+#usage run.script <benchmark> [-reg REGS]
+if [ -z "$1" ]; then 
+  echo "usage: run.script <benchmark> [-reg REGS]"
+  exit
+fi
+if [ -z "$2" ]; then 
+  echo "usage: run.script <benchmark> [-reg REGS]"
+  exit
+fi
+
+#args
+BM=$1
+REGS="-reg $2"
+LIMIT=1000
+GREEDY=-greedy
+CHECK=15m
+DB=cache-$BM-$2.db
+
+#paths
+AC_DIR=/home/dmp4866/research/ac
+SAVE_DIR=$AC_DIR/RESULTS.dir
+AC=ac-opt
+
+#files used for testing
+NOW=`date +%Y.%m.%d_%H.%M.%S`
+OUTFILE=$SAVE_DIR/RESULTS-$BM-$NOW
+LOGFILE=$SAVE_DIR/LOG-$BM-$NOW
+
+
+#run adaptor
+make opt -C $AC_DIR
+cp $AC_DIR/$AC .
+CMD="$AC -limit $LIMIT $GREEDY -out RESULTS -log LOG -db $DB -check $CHECK $REGS -run $BM"
+echo $CMD
+`$CMD 2>/dev/null`
+
+cp RESULTS $OUTFILE
+cp LOG $LOGFILE
+
