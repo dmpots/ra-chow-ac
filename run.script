@@ -22,18 +22,17 @@ AC_DIR=/home/dmp4866/research/ac
 SAVE_DIR=$AC_DIR/RESULTS.dir
 AC=ac-opt
 
-#files used for testing
-NOW=`date +%Y.%m.%d_%H.%M.%S`
-OUTFILE=$SAVE_DIR/RESULTS-$BM-$NOW
-LOGFILE=$SAVE_DIR/LOG-$BM-$NOW
-
-
 #run adaptor
 make opt -C $AC_DIR
 cp $AC_DIR/$AC .
 CMD="$AC -limit $LIMIT $GREEDY -out RESULTS -log LOG -db $DB -check $CHECK $REGS -run $BM"
 echo $CMD
 `$CMD 2>/dev/null`
+
+#files used for testing
+NOW=`date +%Y.%m.%d_%H.%M.%S`
+OUTFILE=$SAVE_DIR/RESULTS-$BM-$NOW
+LOGFILE=$SAVE_DIR/log/LOG-$BM-$NOW
 
 cp RESULTS $OUTFILE
 cp LOG $LOGFILE
