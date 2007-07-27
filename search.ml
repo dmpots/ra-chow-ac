@@ -664,7 +664,6 @@ struct
   let adaptable_args_for_k k =[
     ("b", ChowArgs.IntC [0;2;3;4;5;6;7;8;9;10;15]);
     ("l", ChowArgs.TupleC (combine (upto (k-4) 1) (upto (k-6) 2)));
-    ("m", ChowArgs.BoolC  [true; false]);
     ("e", ChowArgs.BoolC  [true; false]);
     ("z", ChowArgs.BoolC  [true; false]);
     ("t", ChowArgs.BoolC  [true; false]);
