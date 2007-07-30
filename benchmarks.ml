@@ -67,26 +67,18 @@ let applu = [
   "setiv.i"; "rhs.i"; "pintgr.i"; "setbv.i"; "blts.i"
 ] (* excluded: applu.i, maxnorm.i *)
 
+
 let wave5X = [
-  "injbatX.i"; "vslv1pX.i"; "ecrdX.i"; "bcndbX.i";
-  "linjX.i"; "sinqbX.i"; "cosqiX.i"; "smoothX.i"; "erfX.i";
-  "lasdenX.i"; "sinqfX.i"; "sinqiX.i"; "cosqfX.i"; "getbX.i";
-  "fftfX.i"; "tpartX.i"; "radfgX.i"; "putdtX.i"; "rfftb1X.i";
-  "rffti1X.i"; "transX.i"; "radb4X.i"; "abrtX.i"; "cosqbX.i";
-  "denitrX.i"; "fftbX.i"; "recreX.i"; "cosqf1X.i"; "solv2yX.i";
-  "energyX.i"; "rfftbX.i"; "radb5X.i"; "rinjX.i"; "genprbX.i";
-  "pdiagX.i"; "densX.i"; "radb2X.i"; "rfftfX.i"; "rfftiX.i";
-  "ranfX.i"; "advbndX.i"; "radb3X.i"; "vnewlX.i"; "laserX.i";
-  "celbndX.i"; "parmovX.i"; "denitlX.i"; "clrdtX.i"; "bcndX.i";
-  "putbX.i"; "tcompX.i"; "fieldX.i"; "rfftf1X.i"; "sudtblX.i";
-  "genbX.i"; "radf4X.i"; "diagnsX.i"; "waveX.i"; "setbX.i";
-  "parmvrX.i"; "radf5X.i"; "densxX.i"; "radf2X.i"; "getdtX.i";
-  "injallX.i"; "densyX.i"; "setinjX.i"; "radf3X.i"; "ecwrX.i";
-  "bcndtX.i"; "laspowX.i"; "radbgX.i"; "ibinX.i"; "initX.i";
-  "bcndrX.i"; "parmveX.i"; "endrunX.i"; "bcndlX.i"; "injchkX.i";
-  "injconX.i"; "vavgX.i"; "rewdtX.i"; "vslv1xX.i"; "inibndX.i";
-  "cosqb1X.i"; "slv2xyX.i"; "jobtimX.i"; "numbX.i"; "denptX.i"
-]
+  "bcndX.i";"celbndX.i";"denptX.i";"densX.i";"densxX.i";"densyX.i"; 
+  "diagnsX.i";"ecrdX.i";"ecwrX.i";"energyX.i";"fftbX.i";"fftfX.i";
+  "fieldX.i";"genbX.i";"genprbX.i";"getbX.i";"initX.i";"injchkX.i";
+  "jobtimX.i";"lasdenX.i";"laspowX.i";"numbX.i";"parmvrX.i";
+  "pdiagX.i"; "putbX.i";"radb2X.i";"radb4X.i";"radb5X.i";
+  "radf2X.i";"radf4X.i";"radf5X.i";"ranfX.i";"rfftbX.i";
+  "rfftb1X.i";"rfftfX.i";"rfftf1X.i";"rfftiX.i";"rffti1X.i";
+  "setbX.i";"setinjX.i";"slv2xyX.i";"smoothX.i";"solv2yX.i";
+  "transX.i";"vslv1pX.i"
+] (* excluded: tons *)
 
 let get_files_from_name s =
   match (from_name s) with
