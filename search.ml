@@ -570,6 +570,7 @@ struct
     ("-o", Arg.Unit (make_bool_arg "o"), "");
     ("-a", Arg.Unit (make_bool_arg "a"), "");
     ("-l", Arg.String (make_tup_arg  "l"), "");
+    ("-n", Arg.Unit (make_bool_arg "n"), "");
   ]
 
   let sort_order (arg,value) =
@@ -590,7 +591,8 @@ struct
       | "g" -> 13
       | "o" -> 14
       | "a" -> 15
-      | "l" -> 16
+      | "n" -> 16
+      | "l" -> 17
       | _ -> failwith ("unknown arg: "^arg)
 
   let sorted_order (args : chow_arg list) =
@@ -672,6 +674,7 @@ struct
     ("g", ChowArgs.BoolC  [true; false]);
     ("o", ChowArgs.BoolC  [true; false]);
     ("a", ChowArgs.BoolC  [true; false]);
+    ("n", ChowArgs.BoolC  [true; false]);
   ]
   let adaptable_args = adaptable_args_for_k 32
 
