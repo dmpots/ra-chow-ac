@@ -14,6 +14,8 @@ let patience = ref 0.2
 let greedy   = ref false
 let check    = ref "15m"
 let num_reg  = ref 32
+type version = Classic | Engineered
+let version = ref Engineered
 
 (* functions for setting values from command line *)
 let set_bench bench =
@@ -26,6 +28,12 @@ let set_log logfile =
   logger := (open_out logfile)
 
 let not_set file_ref = !file_ref = sentinal
+let set_version v =
+  version := 
+    match v with 
+      | "classic" -> Classic 
+      | "engineered" -> Engineered 
+      | _ -> assert false
 
 (* parse command line arguments *)
 let check_args () =  ()
@@ -36,6 +44,8 @@ let parse_args () =
        "make search greedy greedy (defaults to false)");
      ("-patience", Arg.Set_float patience, 
        "[PATIENCE] set patience (defaults to 0.20)");
+     ("-version", Arg.Symbol (["classic"; "engineered"], set_version), 
+       "set version (defaults to engineered)");
      ("-out", Arg.Set_string out_file, "[OUTFILE] set output file");
      ("-db", Arg.String set_db , "[DBFILE] set database file");
      ("-log", Arg.String set_log , 
@@ -49,7 +59,7 @@ let parse_args () =
      ("-reg", Arg.Set_int num_reg, 
        "[K] set number of registers to use (default 32)");
      ("-run", Arg.Symbol (Benchmarks.valid_names, set_bench), 
-       "[BENCHMARK] run search on this benchmark");
+       "run search on this benchmark");
     ]
   in
   let usage = "ac -run <benchmark> [OPTIONS]" in
@@ -67,15 +77,22 @@ let sorter = (fun (_,_,f1) (_,_,f2) -> compare f2 f1)
 (* build a search function from the options given. the search function
  * should take in a list of files included in the search and print the
  * results of the search *)
-let build_search lim seed out_file cache logger patience greedy check nregs =
+let build_search lim seed out_file cache logger patience greedy check nregs version =
   (* create search modules *)
   let module BenchSearch = BenchmarkSearch(ChowSearchSpace(
     struct 
-      let adaptable_args = ChowChoices.adaptable_args_for_k nregs
-      let fixed_args = [
-        ("r", ChowArgs.Int nregs); 
-        ("f", ChowArgs.Bool true); 
-      ]
+      let adaptable_args = 
+        match version with
+          | Classic -> ChowChoices.classic_chow_adaptable_args_for_k nregs
+          | Engineered -> ChowChoices.adaptable_args_for_k nregs
+
+      let fixed_args = 
+        match version with
+          | Classic -> ChowChoices.classic_chow_fixed_args_for_k nregs
+          | Engineered -> [
+              ("r", ChowArgs.Int nregs); 
+              ("f", ChowArgs.Bool true); 
+            ]
     end
   ))
   in
@@ -91,6 +108,9 @@ let build_search lim seed out_file cache logger patience greedy check nregs =
     Printf.fprintf logger "* limit: %d\n" lim;
     Printf.fprintf logger "* checkpoint: %s\n" check;
     Printf.fprintf logger "* outfile: %s\n" out_file;
+    Printf.fprintf logger "* version: %s\n" (match version with 
+        Classic -> "classic" | Engineered -> "engineered"
+      );
     Printf.fprintf logger "*** END SEARCH CONFIGURATION ***\n";
     flush logger;
   end;
@@ -118,8 +138,8 @@ let build_search lim seed out_file cache logger patience greedy check nregs =
 let _ = 
   parse_args ();
   let search = 
-    build_search !limit !seed_val !out_file 
-                 !cache !logger !patience !greedy !check !num_reg
+    build_search !limit !seed_val !out_file !cache 
+                 !logger !patience !greedy !check !num_reg !version
   in
     List.iter (fun files -> search files;) !benchmarks 
 

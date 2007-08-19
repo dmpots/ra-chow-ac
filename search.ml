@@ -547,6 +547,7 @@ struct
   let add_arg arg = arg_accum := arg :: !arg_accum
   let make_bool_arg name ()  = add_arg (name, Bool true)
   let make_int_arg name ival = add_arg (name, Int ival)
+  let make_float_arg name fval = add_arg (name, Float fval)
   let make_tup_arg name sval = 
     match (Str.bounded_split comma sval 2) with
       | [h;t] -> add_arg (name, Tuple (int_of_string h, int_of_string t))
@@ -571,6 +572,7 @@ struct
     ("-a", Arg.Unit (make_bool_arg "a"), "");
     ("-l", Arg.String (make_tup_arg  "l"), "");
     ("-n", Arg.Unit (make_bool_arg "n"), "");
+    ("-d", Arg.Float (make_float_arg "d"), "");
   ]
 
   let sort_order (arg,value) =
@@ -592,7 +594,8 @@ struct
       | "o" -> 14
       | "a" -> 15
       | "n" -> 16
-      | "l" -> 17
+      | "d" -> 17
+      | "l" -> 18
       | _ -> failwith ("unknown arg: "^arg)
 
   let sorted_order (args : chow_arg list) =
@@ -660,12 +663,17 @@ struct
     in
     List.rev (aux 0 [])
 
+  let local_for_k k = 
+    ("l", ChowArgs.TupleC (combine (upto (k-4) 1) (upto (k-6) 2)))
+   
+  (* engineered chow args *)
   let fixed_args = [
-    ("r", ChowArgs.Int 32)
+    ("r", ChowArgs.Int 32);
   ]
-  let adaptable_args_for_k k =[
+
+  let adaptable_args_for_k k = [
     ("b", ChowArgs.IntC [0;2;3;4;5;6;7;8;9;10;15]);
-    ("l", ChowArgs.TupleC (combine (upto (k-4) 1) (upto (k-6) 2)));
+    local_for_k k;
     ("e", ChowArgs.BoolC  [true; false]);
     ("z", ChowArgs.BoolC  [true; false]);
     ("t", ChowArgs.BoolC  [true; false]);
@@ -675,20 +683,27 @@ struct
     ("o", ChowArgs.BoolC  [true; false]);
     ("a", ChowArgs.BoolC  [true; false]);
     ("n", ChowArgs.BoolC  [true; false]);
+    ("d", ChowArgs.FloatC [1.0; 5.0; 10.0; 20.0]);
   ]
   let adaptable_args = adaptable_args_for_k 32
+  
+  (* classic chow args *)
+  let classic_chow_fixed_args_for_k k = [
+    ("r", ChowArgs.Int k);
+    ("f", ChowArgs.Bool true);
+    ("n", ChowArgs.Bool true);
+  ]
+  let classic_chow_adaptable_args_for_k k =[
+    ("b", ChowArgs.IntC [0;2;3;4;5;6;7;8;9;10;15]);
+    (local_for_k k);
+    ("c", ChowArgs.IntC   [0;1;2;3]);
+    ("g", ChowArgs.BoolC  [true; false]);
+    ("a", ChowArgs.BoolC  [true; false]);
+    ("d", ChowArgs.FloatC [1.0; 5.0; 10.0; 20.0]);
+  ]
 
-  module R16 =
-  struct
-    let fixed_args = [("r", ChowArgs.Int 16)]
-    let adaptable_args = adaptable_args
-  end
-  module R32 =
-  struct
-    let fixed_args = [("r", ChowArgs.Int 32)]
-    let adaptable_args = adaptable_args
-  end
-end
+
+ end
 
 (* ---------------------- SEARCH SPACES ----------------------*)
 (*===============================================================
