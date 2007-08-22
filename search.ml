@@ -87,7 +87,10 @@ struct
    * return it *)
   let single_fitness resident = 
     if resident = [] then [] 
-    else List.hd (bulk_fitness [resident])
+    else
+      let bf = (bulk_fitness [resident]) in
+      assert (List.length bf > 0);
+      List.hd bf
 end
 
 (*================================================================
@@ -573,12 +576,14 @@ struct
     ("-l", Arg.String (make_tup_arg  "l"), "");
     ("-n", Arg.Unit (make_bool_arg "n"), "");
     ("-d", Arg.Float (make_float_arg "d"), "");
+    ("-k", Arg.Unit (make_bool_arg "k"), "");
+    ("-u", Arg.Int (make_int_arg  "u"), "");
   ]
 
   let sort_order (arg,value) =
     match arg with
-      | "b" -> 1
       | "r" -> 0
+      | "b" -> 1
       | "p" -> 2
       | "m" -> 3
       | "e" -> 4
@@ -595,7 +600,9 @@ struct
       | "a" -> 15
       | "n" -> 16
       | "d" -> 17
-      | "l" -> 18
+      | "k" -> 18
+      | "u" -> 19
+      | "l" -> 20
       | _ -> failwith ("unknown arg: "^arg)
 
   let sorted_order (args : chow_arg list) =
@@ -673,7 +680,7 @@ struct
 
   let adaptable_args_for_k k = [
     ("b", ChowArgs.IntC [0;2;3;4;5;6;7;8;9;10;15]);
-    local_for_k k;
+    (local_for_k k);
     ("e", ChowArgs.BoolC  [true; false]);
     ("z", ChowArgs.BoolC  [true; false]);
     ("t", ChowArgs.BoolC  [true; false]);
@@ -684,6 +691,7 @@ struct
     ("a", ChowArgs.BoolC  [true; false]);
     ("n", ChowArgs.BoolC  [true; false]);
     ("d", ChowArgs.FloatC [1.0; 5.0; 10.0; 20.0]);
+    ("k", ChowArgs.BoolC  [true; false]);
   ]
   let adaptable_args = adaptable_args_for_k 32
   
@@ -700,6 +708,7 @@ struct
     ("g", ChowArgs.BoolC  [true; false]);
     ("a", ChowArgs.BoolC  [true; false]);
     ("d", ChowArgs.FloatC [1.0; 5.0; 10.0; 20.0]);
+    ("k", ChowArgs.BoolC  [true; false]);
   ]
 
 

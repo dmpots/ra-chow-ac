@@ -16,6 +16,7 @@ let check    = ref "15m"
 let num_reg  = ref 32
 type version = Classic | Engineered
 let version = ref Engineered
+let split_limit = ref 0
 
 (* functions for setting values from command line *)
 let set_bench bench =
@@ -56,6 +57,8 @@ let parse_args () =
        "[EVALS] max number of fitness evaluations (default 10)");
      ("-seed", Arg.Set_int seed_val , 
        "[SEED] random number generator seed (default random)");
+     ("-splits", Arg.Set_int split_limit , 
+       "[SPLITS] number of splits allowed (default no limit (0))");
      ("-reg", Arg.Set_int num_reg, 
        "[K] set number of registers to use (default 32)");
      ("-run", Arg.Symbol (Benchmarks.valid_names, set_bench), 
@@ -77,7 +80,7 @@ let sorter = (fun (_,_,f1) (_,_,f2) -> compare f2 f1)
 (* build a search function from the options given. the search function
  * should take in a list of files included in the search and print the
  * results of the search *)
-let build_search lim seed out_file cache logger patience greedy check nregs version =
+let build_search lim seed out_file cache logger patience greedy check nregs version split_limit =
   (* create search modules *)
   let module BenchSearch = BenchmarkSearch(ChowSearchSpace(
     struct 
@@ -88,10 +91,13 @@ let build_search lim seed out_file cache logger patience greedy check nregs vers
 
       let fixed_args = 
         match version with
-          | Classic -> ChowChoices.classic_chow_fixed_args_for_k nregs
+          | Classic ->
+            ("u", ChowArgs.Int split_limit)::
+            ChowChoices.classic_chow_fixed_args_for_k nregs
           | Engineered -> [
               ("r", ChowArgs.Int nregs); 
               ("f", ChowArgs.Bool true); 
+              ("u", ChowArgs.Int split_limit);
             ]
     end
   ))
@@ -140,6 +146,7 @@ let _ =
   let search = 
     build_search !limit !seed_val !out_file !cache 
                  !logger !patience !greedy !check !num_reg !version
+                 !split_limit
   in
     List.iter (fun files -> search files;) !benchmarks 
 
