@@ -16,6 +16,9 @@ LIMIT=1000
 GREEDY=-greedy
 CHECK=15m
 DB=cache-$BM-$2.db
+VERSION=engineered
+SPLITS=0
+LOCALS=
 
 #paths
 AC_DIR=/home/dmp4866/research/ac
@@ -25,14 +28,14 @@ AC=ac-opt
 #run adaptor
 make opt -C $AC_DIR
 cp $AC_DIR/$AC .
-CMD="$AC -limit $LIMIT $GREEDY -out RESULTS -log LOG -db $DB -check $CHECK $REGS -run $BM"
+CMD="$AC -run $BM $REGS -limit $LIMIT -version $VERSION $GREEDY -out RESULTS -log LOG -db $DB -check $CHECK -splits $SPLITS $LOCALS"
 echo $CMD
 `$CMD 2>STDERR.out`
 
 #files used for testing
 NOW=`date +%Y.%m.%d_%H.%M.%S`
-OUTFILE=$SAVE_DIR/RESULTS-$BM-$NOW
-LOGFILE=$SAVE_DIR/log/LOG-$BM-$NOW
+OUTFILE=$SAVE_DIR/RESULTS-$BM-$2-$NOW
+LOGFILE=$SAVE_DIR/log/LOG-$BM-$2-$NOW
 
 cp RESULTS $OUTFILE
 cp LOG $LOGFILE
