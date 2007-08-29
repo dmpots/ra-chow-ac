@@ -21,7 +21,7 @@ SPLITS=0
 LOCALS=
 
 #paths
-AC_DIR=/home/dmp4866/research/ac
+AC_DIR=$HOME/research/ac
 SAVE_DIR=$AC_DIR/RESULTS.dir
 AC=ac-opt
 
