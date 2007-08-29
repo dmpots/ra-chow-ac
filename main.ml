@@ -36,6 +36,11 @@ let set_version v =
       | "engineered" -> Engineered 
       | _ -> assert false
 
+let exclude_local = List.filter (fun (p,_) -> p <> "l")
+let local_filter = ref (fun x -> x)
+let set_local_filter () =
+  local_filter := exclude_local
+
 (* parse command line arguments *)
 let check_args () =  ()
 let parse_args () =
@@ -47,6 +52,8 @@ let parse_args () =
        "[PATIENCE] set patience (defaults to 0.20)");
      ("-version", Arg.Symbol (["classic"; "engineered"], set_version), 
        "set version (defaults to engineered)");
+     ("-nolocal", Arg.Unit(set_local_filter), 
+       "exclude # of locals reserved from search (defaults to false)");
      ("-out", Arg.Set_string out_file, "[OUTFILE] set output file");
      ("-db", Arg.String set_db , "[DBFILE] set database file");
      ("-log", Arg.String set_log , 
@@ -80,14 +87,18 @@ let sorter = (fun (_,_,f1) (_,_,f2) -> compare f2 f1)
 (* build a search function from the options given. the search function
  * should take in a list of files included in the search and print the
  * results of the search *)
-let build_search lim seed out_file cache logger patience greedy check nregs version split_limit =
+let build_search lim seed out_file cache logger patience greedy check nregs version split_limit locals_filter =
   (* create search modules *)
   let module BenchSearch = BenchmarkSearch(ChowSearchSpace(
     struct 
       let adaptable_args = 
         match version with
-          | Classic -> ChowChoices.classic_chow_adaptable_args_for_k nregs
-          | Engineered -> ChowChoices.adaptable_args_for_k nregs
+          | Classic -> 
+            locals_filter
+              (ChowChoices.classic_chow_adaptable_args_for_k nregs)
+          | Engineered -> 
+            locals_filter
+              (ChowChoices.adaptable_args_for_k nregs)
 
       let fixed_args = 
         match version with
@@ -146,7 +157,7 @@ let _ =
   let search = 
     build_search !limit !seed_val !out_file !cache 
                  !logger !patience !greedy !check !num_reg !version
-                 !split_limit
+                 !split_limit !local_filter
   in
     List.iter (fun files -> search files;) !benchmarks 
 
