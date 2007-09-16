@@ -17,6 +17,7 @@ let num_reg  = ref 32
 type version = Classic | Engineered
 let version = ref Engineered
 let split_limit = ref 0
+let filter_benchmarks = ref true
 
 (* functions for setting values from command line *)
 let set_bench bench =
@@ -66,6 +67,8 @@ let parse_args () =
        "[SEED] random number generator seed (default random)");
      ("-splits", Arg.Set_int split_limit , 
        "[SPLITS] number of splits allowed (default no limit (0))");
+     ("-no-filter", Arg.Clear filter_benchmarks, 
+       "will not filter benchmark files requireing more registers than given");
      ("-reg", Arg.Set_int num_reg, 
        "[K] set number of registers to use (default 32)");
      ("-run", Arg.Symbol (Benchmarks.valid_names, set_bench), 
@@ -159,5 +162,11 @@ let _ =
                  !logger !patience !greedy !check !num_reg !version
                  !split_limit !local_filter
   in
-    List.iter (fun files -> search files;) !benchmarks 
+    let benchmark_files = 
+      if !filter_benchmarks then 
+        Benchmarks.filter_files_for_r !num_reg !benchmarks
+      else
+        !benchmarks
+    in
+    List.iter (fun files -> search files;) benchmark_files
 

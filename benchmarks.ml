@@ -96,3 +96,89 @@ let get_files_from_name s =
     | Applu -> applu
     | Wave5X -> wave5X
 
+
+
+(* we can exclude searches on files that need more registers than we
+ * are using for allocation to speed up the search, since those results
+ * should not be used in the results comparison anyway 
+ *)
+
+let excludes_for_r = function
+  | 32 -> []
+  | 24 -> ["efill.i"; "twldrv.i"]
+  | 16 -> [
+            "twldrv.i";
+            "vslv1pX.i";
+            "drigl.i";
+            "rfftb1X.i";
+            "rkf45.i";
+            "rfftf1X.i";
+            "solv2yX.i";
+            "efill.i";
+            "debflu.i";
+            "slv2xyX.i";
+            "rkfs.i";
+            "yeh.i";
+           ]
+  | 8 ->  [
+            "twldrv.i";
+            "celbndX.i";
+            "vslv1pX.i";
+            "injchkX.i";
+            "transX.i";
+            "prophy.i";
+            "fehl.i";
+            "ssor.i";
+            "buts.i";
+            "densyX.i";
+            "radb4X.i";
+            "drigl.i";
+            "subb.i";
+            "dcoera.i";
+            "rfftfX.i";
+            "blts.i";
+            "sgemv.i";
+            "rfftb1X.i";
+            "saturr.i";
+            "radf4X.i";
+            "rkf45.i";
+            "deseco.i";
+            "colbur.i";
+            "inter.i";
+            "svd.i";
+            "rfftf1X.i";
+            "l2norm.i";
+            "radb2X.i";
+            "supp.i";
+            "solv2yX.i";
+            "efill.i";
+            "radb5X.i";
+            "debflu.i";
+            "radf2X.i";
+            "radf5X.i";
+            "slv2xyX.i";
+            "smoothX.i";
+            "denptX.i";
+            "rkfs.i";
+            "yeh.i";
+            "dyeh.i";
+            "rfftbX.i";
+            "seval.i";
+            "ddeflu.i";
+            "fieldX.i";
+            "sgemm.i";
+          ]
+    | _ -> []
+
+let filter_files_for_r r bench_files =
+  let excluded_files = excludes_for_r r in
+  let ok_files = 
+    List.map (fun files ->
+      List.filter (fun file -> 
+        not (List.exists (fun exclude -> file = exclude) excluded_files)
+      ) files
+    ) bench_files
+  in
+  (* get rid of any benchmarks that have been completly filtered *)
+  List.filter (fun files -> files <> []) ok_files
+
